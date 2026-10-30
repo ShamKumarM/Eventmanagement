@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from supabase import Client, create_client
+from .jobs import jobs_router
+
 
 load_dotenv()
 
@@ -17,6 +19,9 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI(title="Event Workforce API", version="0.1.0")
+
+app.include_router(jobs_router)
+
 
 
 class RegisterRequest(BaseModel):
