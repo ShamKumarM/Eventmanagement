@@ -5,8 +5,6 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from supabase import Client, create_client
-from .jobs import jobs_router
-
 
 load_dotenv()
 
@@ -19,9 +17,6 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI(title="Event Workforce API", version="0.1.0")
-
-app.include_router(jobs_router)
-
 
 
 class RegisterRequest(BaseModel):
@@ -73,113 +68,4 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/auth/register", status_code=201)
-def register(payload: RegisterRequest):
-    try:
-        response = supabase.auth.sign_up({
-            "email": str(payload.email),
-            "password": payload.password,
-            "options": {
-                "data": {"full_name": payload.full_name}
-            },
-        })
-
-        user = response.user
-        if not user:
-            raise HTTPException(status_code=400, detail="Registration failed")
-
-        return {
-            "message": (
-                "Registration received. Check your email to confirm your account."
-                if not response.session
-                else "Registration successful."
-            ),
-            "user": {
-                "id": str(user.id),
-                "email": user.email,
-            },
-            "requires_email_confirmation": response.session is None,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise auth_error(exc) from exc
-
-
-@app.post("/auth/login")
-def login(payload: LoginRequest):
-    try:
-        response = supabase.auth.sign_in_with_password({
-            "email": str(payload.email),
-            "password": payload.password,
-        })
-
-        if not response.user or not response.session:
-            raise HTTPException(status_code=401, detail="Login failed")
-
-        return {
-            "message": "Login successful",
-            "user": {
-                "id": str(response.user.id),
-                "email": response.user.email,
-            },
-            "access_token": response.session.access_token,
-            "refresh_token": response.session.refresh_token,
-            "token_type": "bearer",
-            "expires_in": response.session.expires_in,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise auth_error(exc) from exc
-
-
-@app.get("/auth/me")
-def me(user=Depends(get_current_user)):
-    return {
-        "id": str(user.id),
-        "email": user.email,
-    }
-
-
-@app.post("/auth/logout")
-def logout(user=Depends(get_current_user)):
-    # Supabase's Python client is shared by the app, so avoid calling
-    # global sign_out() here. Client-side token deletion is not enough
-    # for server-side revocation. Add a request-scoped auth client if
-    # server-side logout/revocation is required.
-    return {"message": "Logout endpoint reached", "user_id": str(user.id)}
-
-
-@app.post("/auth/forgot-password")
-def forgot_password(payload: EmailRequest):
-    try:
-        supabase.auth.reset_password_for_email(str(payload.email))
-        # Same response regardless of whether the account exists.
-        return {
-            "message": "If the account exists, password recovery instructions will be sent."
-        }
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not start password recovery"
-        ) from exc
-
-
-@app.post("/auth/reset-password")
-def reset_password(
-    payload: ResetPasswordRequest,
-    user=Depends(get_current_user),
-):
-    # This endpoint requires a valid Supabase access token.
-    # The recovery flow must establish a valid recovery session first.
-    try:
-        supabase.auth.update_user({
-            "password": payload.new_password
-        })
-        return {"message": "Password updated"}
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not update password"
-        ) from exc
+app.include_router(auth_router)
