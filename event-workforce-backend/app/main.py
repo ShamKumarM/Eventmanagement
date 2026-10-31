@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 
 from app.routes.auth import router as auth_router
+from app.jobs.router import router as jobs_router
 
 app = FastAPI(
     title="Coimbatore Event Workforce Platform API",
@@ -16,3 +17,4 @@ def health_check():
 
 
 app.include_router(auth_router)
+app.include_router(jobs_router)
