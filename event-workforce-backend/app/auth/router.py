@@ -2,11 +2,12 @@ import logging
 import re
 from html import escape
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 
 from app.core.config import RECOVERY_REDIRECT_URL
-from app.schemas.auth import (
+from app.auth.deps import get_current_user
+from app.auth.schemas import (
     CompletePasswordResetRequest,
     EmailRequest,
     LoginRequest,
@@ -45,31 +46,6 @@ def _public_auth_error(exc: Exception) -> tuple[int, str]:
         return 400, "The password does not meet the requirements."
     return 400, "The authentication request could not be completed. Check the server logs."
 
-
-def get_current_user(authorization: str | None = Header(default=None)):
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Provide an Authorization: Bearer <access_token> header.",
-        )
-
-    token = authorization.split(" ", 1)[1].strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing access token.")
-
-    try:
-        response = create_supabase_client().auth.get_user(token)
-        if not response.user:
-            raise HTTPException(status_code=401, detail="Invalid or expired session.")
-        return response.user
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log_auth_error("Token verification", exc)
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired session.",
-        ) from exc
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
