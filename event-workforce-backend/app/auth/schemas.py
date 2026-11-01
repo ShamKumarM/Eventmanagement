@@ -76,3 +76,26 @@ class CompletePasswordResetRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
+
+
+
+class RoleSelectionRequest(BaseModel):
+    """Initial role selection; admin is intentionally not a public option."""
+
+    role: str = Field(pattern=r"^(worker|employer)$")
+    organisation_name: str | None = Field(default=None, min_length=2, max_length=200)
+
+    @field_validator("organisation_name")
+    @classmethod
+    def normalize_organisation_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Organisation name must contain at least 2 characters.")
+        return value
+
+    @field_validator("role")
+    @classmethod
+    def validate_role_requirements(cls, value: str) -> str:
+        return value
