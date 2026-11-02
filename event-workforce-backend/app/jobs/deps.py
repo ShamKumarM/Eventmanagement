@@ -1,37 +1,35 @@
-"""Auth dependencies for the jobs module."""
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+"""Authentication dependencies used by the jobs module."""
+from fastapi import Depends, HTTPException, status
+
+from app.auth.deps import get_current_user
 from .db import db
+from fastapi.security import HTTPBearer
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
-
-def get_current_user(
-    creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-):
-    if not creds or not creds.credentials:
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    try:
-        response = db.auth.get_user(creds.credentials)
-        if not response.user:
-            raise HTTPException(status_code=401, detail="Invalid access token")
-        return response.user
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired access token")
-
-
 def get_current_employer(user=Depends(get_current_user)):
-    res = (
+    """Allow job-management routes only for users who selected employer."""
+    result = (
         db.table("profiles")
-        .select("role")
+        .select("role, role_selected")
         .eq("id", str(user.id))
+        .maybe_single()
         .execute()
     )
-    if not res.data:
-        raise HTTPException(status_code=403, detail="Profile not found")
-    if res.data[0]["role"] != "employer":
-        raise HTTPException(status_code=403, detail="Only employers can do this")
+
+    profile = result.data
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Profile not found.",
+        )
+
+    if profile.get("role") != "employer" or not profile.get("role_selected"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only users who selected the employer role can manage jobs.",
+        )
+
     return user
