@@ -13,8 +13,10 @@ from app.auth.schemas import (
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    RoleSelectionRequest,
 )
 from app.services.supabase_client import create_supabase_client, supabase
+from app.auth.db import admin_db
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +119,96 @@ def login(payload: LoginRequest):
 
 @router.get("/me")
 def get_me(user=Depends(get_current_user)):
-    return {"id": str(user.id), "email": user.email}
+    """Return the authenticated Supabase user and their application profile."""
+    try:
+        result = (
+            admin_db.table("profiles")
+            .select("id, full_name, phone, role, role_selected, created_at, updated_at")
+            .eq("id", str(user.id))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        _log_auth_error("Profile lookup", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not load your profile. Please try again.",
+        ) from exc
+
+    if not result.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Your application profile was not found. Please contact support.",
+        )
+
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "profile": result.data[0],
+        "role_selected": result.data[0]["role_selected"],
+    }
+
+
+@router.post("/select-role")
+def select_role(payload: RoleSelectionRequest, user=Depends(get_current_user)):
+    """Atomically save a user's initial role through a restricted database RPC."""
+    organisation_name = (payload.organisation_name or "").strip() or None
+
+    if payload.role == "employer" and not organisation_name:
+        raise HTTPException(
+            status_code=422,
+            detail="organisation_name is required when selecting the employer role.",
+        )
+    if payload.role == "worker" and organisation_name:
+        raise HTTPException(
+            status_code=422,
+            detail="organisation_name is only accepted for the employer role.",
+        )
+
+    try:
+        result = admin_db.rpc(
+            "select_initial_role",
+            {
+                "p_user_id": str(user.id),
+                "p_role": payload.role,
+                "p_organisation_name": organisation_name,
+            },
+        ).execute()
+        data = result.data
+        if isinstance(data, list) and data:
+            saved = data[0]
+        elif isinstance(data, dict):
+            saved = data
+        else:
+            saved = {"role": payload.role, "role_selected": True}
+        return {
+            "message": "Role selected successfully.",
+            "user_id": str(user.id),
+            "role": saved.get("role", payload.role),
+            "role_selected": saved.get("role_selected", True),
+        }
+    except Exception as exc:
+        _log_auth_error("Role selection", exc)
+        message = str(exc).lower()
+        if "role_already_selected" in message or "already selected" in message:
+            raise HTTPException(
+                status_code=409,
+                detail="Your role has already been selected and cannot be changed here.",
+            ) from exc
+        if "profile_not_found" in message or "no profile" in message:
+            raise HTTPException(
+                status_code=404,
+                detail="Your application profile was not found. Please contact support.",
+            ) from exc
+        if "invalid_role" in message:
+            raise HTTPException(
+                status_code=422,
+                detail="Role must be either worker or employer.",
+            ) from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Role selection could not be completed. Check the database migration and try again.",
+        ) from exc
 
 
 @router.post("/refresh")
