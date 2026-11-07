@@ -18,7 +18,7 @@ def get_current_employer(user=Depends(get_current_user)):
         .execute()
     )
 
-    profile = result.data
+    profile = result.data if result else None
 
     if not profile:
         raise HTTPException(
