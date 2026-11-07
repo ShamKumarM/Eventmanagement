@@ -128,3 +128,10 @@ Use Postman, not Swagger, for testing.
 - Profile writes are restricted by API allowlists and role checks. The service-role client bypasses RLS, so this backend must remain trusted and must never accept a caller-supplied `user_id`.
 - Skills are reconciled using insert/delete operations. If a request fails mid-operation, reload the skill list and retry.
 - This module does not change the job-application endpoint. Ram's application module should call or replicate the same completion rule on the server before accepting an application.
+
+
+## Preferred location dropdown update
+
+The updated worker profile stores `preferred_state`, `preferred_district`, and `preferred_area`. Run `004_worker_preferred_location.sql` after the job location migration `003_job_location_dropdowns.sql` before deploying the updated API. The mobile app loads the same authenticated location endpoints used by job creation and submits the three selected names together.
+
+The profile API validates that the selected district belongs to the selected state and the selected area belongs to the selected district. `PUT /profile/skills` also accepts an empty `skill_ids` list so a worker can remove all previously selected skills.

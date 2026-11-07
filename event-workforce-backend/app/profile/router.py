@@ -44,7 +44,7 @@ def _require_role(profile: dict, role: str) -> None:
 def _worker_profile(user_id: str) -> dict[str, Any]:
     result = (
         admin_db.table("worker_profiles")
-        .select("user_id, bio, preferred_area, preferred_radius_km, is_available, experience_level, created_at")
+        .select("user_id, bio, preferred_state, preferred_district, preferred_area, preferred_radius_km, is_available, experience_level, created_at")
         .eq("user_id", user_id)
         .limit(1)
         .execute()
@@ -116,12 +116,14 @@ class SharedProfileUpdate(BaseModel):
 class WorkerProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bio: str | None = Field(default=None, max_length=1000)
+    preferred_state: str | None = Field(default=None, min_length=2, max_length=80)
+    preferred_district: str | None = Field(default=None, min_length=2, max_length=100)
     preferred_area: str | None = Field(default=None, min_length=2, max_length=120)
     preferred_radius_km: int | None = Field(default=None, ge=1, le=100)
     is_available: bool | None = None
     experience_level: str | None = Field(default=None, min_length=2, max_length=100)
 
-    @field_validator("bio", "preferred_area", "experience_level")
+    @field_validator("bio", "preferred_state", "preferred_district", "preferred_area", "experience_level")
     @classmethod
     def trim_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -134,7 +136,8 @@ class WorkerProfileUpdate(BaseModel):
 
 class SkillSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    skill_ids: list[int] = Field(min_length=1, max_length=13)
+    # Empty list is valid: it lets a worker remove every previously selected skill.
+    skill_ids: list[int] = Field(default_factory=list, max_length=13)
 
     @field_validator("skill_ids")
     @classmethod
@@ -280,6 +283,29 @@ def get_worker_profile(user=Depends(get_current_user)):
     }
 
 
+def _validate_preferred_location(patch: dict[str, Any]) -> None:
+    location_keys = {"preferred_state", "preferred_district", "preferred_area"}
+    if not (location_keys & patch.keys()):
+        return
+    # Older clients may still update only preferred_area; the current app sends all three.
+    if not location_keys.issubset(patch.keys()):
+        return
+    state_name = patch.get("preferred_state")
+    district_name = patch.get("preferred_district")
+    area_name = patch.get("preferred_area")
+    if not state_name or not district_name or not area_name:
+        raise HTTPException(status_code=422, detail="Choose a state, district and area from the location lists.")
+    state = admin_db.table("location_states").select("id").eq("name", state_name).eq("is_active", True).limit(1).execute()
+    if not state.data:
+        raise HTTPException(status_code=422, detail="Choose a valid preferred state from the list.")
+    district = admin_db.table("location_districts").select("id").eq("state_id", state.data[0]["id"]).eq("name", district_name).eq("is_active", True).limit(1).execute()
+    if not district.data:
+        raise HTTPException(status_code=422, detail="Choose a district that belongs to the selected state.")
+    area = admin_db.table("location_areas").select("id").eq("district_id", district.data[0]["id"]).eq("name", area_name).eq("is_active", True).limit(1).execute()
+    if not area.data:
+        raise HTTPException(status_code=422, detail="Choose an area that belongs to the selected district.")
+
+
 @router.patch("/worker")
 def update_worker_profile(payload: WorkerProfileUpdate, user=Depends(get_current_user)):
     profile = _profile_or_404(str(user.id))
@@ -290,6 +316,7 @@ def update_worker_profile(payload: WorkerProfileUpdate, user=Depends(get_current
     for key, value in patch.items():
         if value is None and key != "bio":
             raise HTTPException(status_code=422, detail=f"{key} cannot be null.")
+    _validate_preferred_location(patch)
     try:
         result = (
             admin_db.table("worker_profiles")
@@ -314,8 +341,11 @@ def replace_worker_skills(payload: SkillSelection, user=Depends(get_current_user
     profile = _profile_or_404(str(user.id))
     _require_role(profile, "worker")
 
-    valid_result = admin_db.table("skills").select("id").in_("id", payload.skill_ids).execute()
-    valid_ids = {int(row["id"]) for row in (valid_result.data or [])}
+    if payload.skill_ids:
+        valid_result = admin_db.table("skills").select("id").in_("id", payload.skill_ids).execute()
+        valid_ids = {int(row["id"]) for row in (valid_result.data or [])}
+    else:
+        valid_ids = set()
     invalid_ids = sorted(set(payload.skill_ids) - valid_ids)
     if invalid_ids:
         raise HTTPException(status_code=422, detail={"invalid_skill_ids": invalid_ids})
