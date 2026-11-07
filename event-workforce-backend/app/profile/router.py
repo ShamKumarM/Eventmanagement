@@ -1,7 +1,7 @@
 """Profile management endpoints for workers and employers."""
 from typing import Any
 from urllib.parse import urlparse
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -230,12 +230,6 @@ def get_my_profile(user=Depends(get_current_user)):
     if profile.get("role_selected") and profile.get("role") == "worker":
         response["worker_profile"] = _worker_profile(str(user.id))
         response["skill_ids"] = _worker_skill_ids(str(user.id))
-        selected_ids = response["skill_ids"]
-        if selected_ids:
-            selected = admin_db.table("skills").select("id, name").in_("id", selected_ids).order("id").execute()
-            response["skills"] = selected.data or []
-        else:
-            response["skills"] = []
     elif profile.get("role_selected") and profile.get("role") == "employer":
         response["employer_profile"] = _employer_profile(str(user.id))
     return response
@@ -269,58 +263,61 @@ def update_my_shared_profile(payload: SharedProfileUpdate, user=Depends(get_curr
     return {"message": "Profile updated successfully.", "profile": result.data[0]}
 
 
-@router.post("/avatar")
+@router.post("/avatar", status_code=status.HTTP_200_OK)
 async def upload_profile_avatar(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
 ):
-    """Upload a profile photo to the public profile-photos bucket."""
-    _profile_or_404(str(user.id))
-    allowed = {
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
-        "image/webp": ".webp",
-    }
-    mime = (file.content_type or "").lower()
-    if mime not in allowed:
-        raise HTTPException(status_code=415, detail="Choose a JPG, PNG or WEBP profile photo.")
-    content = await file.read(3 * 1024 * 1024 + 1)
+    """Upload a user's profile photo to the public profile-photos bucket."""
+    user_id = str(user.id)
+    mime_type = (file.content_type or "").lower()
+    allowed = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+    if mime_type not in allowed:
+        raise HTTPException(status_code=415, detail="Choose a JPG, PNG, or WEBP image.")
+    content = await file.read(5 * 1024 * 1024 + 1)
     if not content:
-        raise HTTPException(status_code=422, detail="The selected profile photo is empty.")
-    if len(content) > 3 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Profile photos must be 3 MB or smaller.")
+        raise HTTPException(status_code=422, detail="The selected image is empty.")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photos must be 5 MB or smaller.")
     signatures = {
         "image/jpeg": content.startswith(b"\\xff\\xd8\\xff"),
         "image/png": content.startswith(b"\\x89PNG\\r\\n\\x1a\\n"),
         "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
     }
-    if not signatures[mime]:
-        raise HTTPException(status_code=415, detail="The file content does not match its image type.")
-
+    if not signatures[mime_type]:
+        raise HTTPException(status_code=415, detail="The selected file does not match its image format.")
     bucket = "profile-photos"
-    path = f"{user.id}/{uuid4().hex}{allowed[mime]}"
+    object_path = f"{user_id}/avatar{allowed[mime_type]}"
     try:
+        # Remove old extensions so the profile always points at the latest image.
+        for suffix in (".jpg", ".png", ".webp"):
+            if suffix != allowed[mime_type]:
+                try:
+                    admin_db.storage.from_(bucket).remove([f"{user_id}/avatar{suffix}"])
+                except Exception:
+                    pass
         admin_db.storage.from_(bucket).upload(
-            path, content,
-            file_options={"content-type": mime, "upsert": "true"},
+            object_path, content,
+            file_options={"content-type": mime_type, "upsert": "true"},
         )
-        public_url = admin_db.storage.from_(bucket).get_public_url(path)
-        saved = (
+        avatar_url = admin_db.storage.from_(bucket).get_public_url(object_path)
+        if isinstance(avatar_url, dict):
+            avatar_url = avatar_url.get("publicUrl") or avatar_url.get("public_url")
+        if not isinstance(avatar_url, str) or not avatar_url:
+            raise RuntimeError("Storage did not return a public URL.")
+        updated = (
             admin_db.table("profiles")
-            .update({"avatar_url": public_url})
-            .eq("id", str(user.id))
+            .update({"avatar_url": avatar_url})
+            .eq("id", user_id)
             .execute()
         )
-        if not saved.data:
+        if not updated.data:
             raise RuntimeError("Profile photo URL was not saved.")
-        return {"message": "Profile photo updated successfully.", "avatar_url": public_url}
+        return {"message": "Profile photo updated successfully.", "avatar_url": avatar_url}
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Could not save your profile photo. Please try again.",
-        ) from exc
+        raise HTTPException(status_code=503, detail="Could not save your profile photo. Please try again.") from exc
     finally:
         await file.close()
 
