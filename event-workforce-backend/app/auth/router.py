@@ -98,31 +98,12 @@ def login(payload: LoginRequest):
                 detail="Login failed. Check your credentials and email confirmation.",
             )
 
-        # Include the saved role in the login response for clients that want
-        # to route immediately. The database profile remains the source of truth.
-        saved_profile = None
-        try:
-            profile_result = (
-                admin_db.table("profiles")
-                .select("id, full_name, role, role_selected")
-                .eq("id", str(response.user.id))
-                .limit(1)
-                .execute()
-            )
-            if profile_result.data:
-                saved_profile = profile_result.data[0]
-        except Exception as profile_exc:
-            _log_auth_error("Login profile lookup", profile_exc)
-
         return {
             "message": "Login successful.",
             "user": {
                 "id": str(response.user.id),
                 "email": response.user.email,
             },
-            "profile": saved_profile,
-            "role": saved_profile.get("role") if saved_profile else None,
-            "role_selected": saved_profile.get("role_selected") if saved_profile else None,
             "access_token": response.session.access_token,
             "refresh_token": response.session.refresh_token,
             "token_type": "bearer",
