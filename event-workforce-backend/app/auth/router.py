@@ -233,9 +233,32 @@ def refresh_session(payload: RefreshRequest):
         raise
     except Exception as exc:
         _log_auth_error("Session refresh", exc)
+        message = str(exc).lower()
+        provider_status = getattr(exc, "status", None)
+        invalid_refresh_markers = (
+            "invalid refresh token",
+            "refresh token not found",
+            "refresh_token_not_found",
+            "invalid grant",
+            "session not found",
+            "token has expired",
+            "refresh token is expired",
+        )
+        if any(marker in message for marker in invalid_refresh_markers) and provider_status in {None, 400, 401}:
+            raise HTTPException(
+                status_code=401,
+                detail="Your saved sign-in has expired. Please sign in again.",
+            ) from exc
+        if provider_status == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="Session refresh is temporarily rate limited. Please try again shortly.",
+            ) from exc
+        # Provider/network outages are temporary. Do not make the mobile app discard
+        # a perfectly valid refresh token because Supabase could not be reached.
         raise HTTPException(
-            status_code=401,
-            detail="Refresh token is invalid or expired.",
+            status_code=503,
+            detail="Session refresh is temporarily unavailable. Please try again.",
         ) from exc
 
 

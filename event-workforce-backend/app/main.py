@@ -13,7 +13,7 @@ from app.recommendations.router import router as recommendations_router
 app = FastAPI(
     title="Coimbatore Event Workforce Platform API",
     description="Backend API for workers, employers, and event management.",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 app.add_exception_handler(
