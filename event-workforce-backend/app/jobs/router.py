@@ -77,7 +77,33 @@ def check_category(category_id: int) -> None:
         .eq("id", category_id).eq("is_active", True).execute()
     )
     if not res.data:
-        raise HTTPException(422, "Invalid category_id")
+        raise HTTPException(422, "Please choose a job category from the list.")
+
+
+def check_job_location(state: str, district: str, area: str) -> None:
+    """Ensure the selected state, district and area form a valid location chain."""
+    state_row = (
+        db.table("location_states").select("id")
+        .eq("name", state).eq("is_active", True).limit(1).execute()
+    )
+    if not state_row.data:
+        raise HTTPException(422, "Please choose a valid state from the location list.")
+
+    district_row = (
+        db.table("location_districts").select("id")
+        .eq("state_id", state_row.data[0]["id"])
+        .eq("name", district).eq("is_active", True).limit(1).execute()
+    )
+    if not district_row.data:
+        raise HTTPException(422, "Please choose a district that belongs to the selected state.")
+
+    area_row = (
+        db.table("location_areas").select("id")
+        .eq("district_id", district_row.data[0]["id"])
+        .eq("name", area).eq("is_active", True).limit(1).execute()
+    )
+    if not area_row.data:
+        raise HTTPException(422, "Please choose an area that belongs to the selected district.")
 
 
 def weekend_range(today: date) -> tuple[date, date]:
@@ -101,12 +127,48 @@ def list_categories(user=Depends(get_current_user)):
     return res.data
 
 
+@router.get("/locations/states")
+def list_location_states(user=Depends(get_current_user)):
+    result = (
+        db.table("location_states").select("id, name")
+        .eq("is_active", True).order("name").execute()
+    )
+    return result.data or []
+
+
+@router.get("/locations/districts")
+def list_location_districts(
+    state_id: int = Query(..., ge=1, description="Choose a state from /locations/states."),
+    user=Depends(get_current_user),
+):
+    result = (
+        db.table("location_districts").select("id, name")
+        .eq("state_id", state_id).eq("is_active", True).order("name").execute()
+    )
+    return result.data or []
+
+
+@router.get("/locations/areas")
+def list_location_areas(
+    district_id: int = Query(..., ge=1, description="Choose a district from /locations/districts."),
+    user=Depends(get_current_user),
+):
+    result = (
+        db.table("location_areas").select("id, name")
+        .eq("district_id", district_id).eq("is_active", True).order("name").execute()
+    )
+    return result.data or []
+
+
 # ---------- employer side ----------
 
 @router.post("/jobs", status_code=201)
 def create_job(payload: JobCreate, user=Depends(get_current_employer)):
     check_category(payload.category_id)
+    check_job_location(payload.state, payload.district, payload.area)
     row = payload.model_dump(mode="json")
+    # Keep the legacy city column populated for older app screens and integrations.
+    row["city"] = payload.district
     row.update(employer_id=str(user.id), status=JobStatus.open.value)
     res = db.table("jobs").insert(row).execute()
     job = res.data[0]
@@ -150,6 +212,15 @@ def update_job(job_id: UUID, payload: JobUpdate, user=Depends(get_current_employ
 
     if "category_id" in patch:
         check_category(patch["category_id"])
+
+    location_values = {
+        "state": merged.get("state"),
+        "district": merged.get("district"),
+        "area": merged.get("area"),
+    }
+    check_job_location(**location_values)
+    if "district" in patch:
+        patch["city"] = patch["district"]
 
     if "workers_required" in patch:
         selected = selected_counts([job["id"]]).get(job["id"], 0)

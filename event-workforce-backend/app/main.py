@@ -1,6 +1,7 @@
-
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
+from app.core.errors import request_validation_exception_handler
 from app.auth.router import router as auth_router
 from app.jobs.router import router as jobs_router
 from app.profile.router import router as profile_router
@@ -11,7 +12,12 @@ from app.admin.router import router as admin_router
 app = FastAPI(
     title="Coimbatore Event Workforce Platform API",
     description="Backend API for workers, employers, and event management.",
-    version="1.0.0",
+    version="1.1.0",
+)
+
+app.add_exception_handler(
+    RequestValidationError,
+    request_validation_exception_handler,
 )
 
 
