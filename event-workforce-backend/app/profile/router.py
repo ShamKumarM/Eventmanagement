@@ -1,5 +1,8 @@
 """Profile management endpoints for workers and employers."""
 from typing import Any
+from io import BytesIO
+from datetime import datetime, timezone
+from PIL import Image, ImageOps, UnidentifiedImageError
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -268,43 +271,57 @@ async def upload_profile_avatar(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
 ):
-    """Upload a user's profile photo to the public profile-photos bucket."""
+    """Accept common image formats, normalize them to JPEG, and save the avatar."""
     user_id = str(user.id)
-    mime_type = (file.content_type or "").lower()
-    allowed = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
-    if mime_type not in allowed:
-        raise HTTPException(status_code=415, detail="Choose a JPG, PNG, or WEBP image.")
-    content = await file.read(5 * 1024 * 1024 + 1)
-    if not content:
+    raw = await file.read(15 * 1024 * 1024 + 1)
+    await file.close()
+
+    if not raw:
         raise HTTPException(status_code=422, detail="The selected image is empty.")
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Profile photos must be 5 MB or smaller.")
-    signatures = {
-        "image/jpeg": content.startswith(b"\\xff\\xd8\\xff"),
-        "image/png": content.startswith(b"\\x89PNG\\r\\n\\x1a\\n"),
-        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
-    }
-    if not signatures[mime_type]:
-        raise HTTPException(status_code=415, detail="The selected file does not match its image format.")
-    bucket = "profile-photos"
-    object_path = f"{user_id}/avatar{allowed[mime_type]}"
+    if len(raw) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Choose an image smaller than 15 MB.")
+
     try:
-        # Remove old extensions so the profile always points at the latest image.
-        for suffix in (".jpg", ".png", ".webp"):
-            if suffix != allowed[mime_type]:
-                try:
-                    admin_db.storage.from_(bucket).remove([f"{user_id}/avatar{suffix}"])
-                except Exception:
-                    pass
+        with Image.open(BytesIO(raw)) as source:
+            source.verify()
+        with Image.open(BytesIO(raw)) as source:
+            if source.width * source.height > 40_000_000:
+                raise HTTPException(status_code=413, detail="This image is too large to process. Choose a smaller image.")
+            image = ImageOps.exif_transpose(source)
+            # Keep animated formats safe and predictable: use their first frame.
+            try:
+                image.seek(0)
+            except EOFError:
+                pass
+            image = image.convert("RGB")
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=90, optimize=True)
+            jpeg_content = output.getvalue()
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=415,
+            detail="This file could not be opened as an image. Choose a valid photo.",
+        ) from exc
+
+    bucket = "profile-photos"
+    object_path = f"{user_id}/avatar.jpg"
+    try:
+        # One stable JPEG object works regardless of the source image extension.
         admin_db.storage.from_(bucket).upload(
-            object_path, content,
-            file_options={"content-type": mime_type, "upsert": "true"},
+            object_path,
+            jpeg_content,
+            file_options={"content-type": "image/jpeg", "upsert": "true"},
         )
         avatar_url = admin_db.storage.from_(bucket).get_public_url(object_path)
         if isinstance(avatar_url, dict):
             avatar_url = avatar_url.get("publicUrl") or avatar_url.get("public_url")
         if not isinstance(avatar_url, str) or not avatar_url:
             raise RuntimeError("Storage did not return a public URL.")
+
+        # Cache-bust the stable URL so the newly uploaded photo appears immediately.
+        avatar_url = f"{avatar_url}{'&' if '?' in avatar_url else '?'}v={int(datetime.now(timezone.utc).timestamp())}"
         updated = (
             admin_db.table("profiles")
             .update({"avatar_url": avatar_url})
@@ -318,8 +335,6 @@ async def upload_profile_avatar(
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Could not save your profile photo. Please try again.") from exc
-    finally:
-        await file.close()
 
 
 @router.get("/completion")
