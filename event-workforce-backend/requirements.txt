@@ -27,8 +27,8 @@ pydantic==2.14.2
 pydantic_core==2.50.2
 PyJWT==2.15.1
 python-dotenv==1.2.4
-PyYAML==6.0.3
 python-multipart
+PyYAML==6.0.3
 realtime==2.33.0
 starlette==1.10.0
 storage3==2.33.0
