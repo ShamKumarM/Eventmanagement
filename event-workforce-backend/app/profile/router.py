@@ -232,7 +232,15 @@ def get_my_profile(user=Depends(get_current_user)):
     }
     if profile.get("role_selected") and profile.get("role") == "worker":
         response["worker_profile"] = _worker_profile(str(user.id))
-        response["skill_ids"] = _worker_skill_ids(str(user.id))
+        skill_ids = _worker_skill_ids(str(user.id))
+        response["skill_ids"] = skill_ids
+        if skill_ids:
+            response["skills"] = (
+                admin_db.table("skills").select("id, name")
+                .in_("id", skill_ids).order("id").execute().data or []
+            )
+        else:
+            response["skills"] = []
     elif profile.get("role_selected") and profile.get("role") == "employer":
         response["employer_profile"] = _employer_profile(str(user.id))
     return response

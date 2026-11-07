@@ -25,3 +25,7 @@ The Flutter app shows friendly labels but submits those exact values.
 
 `POST /auth/refresh` distinguishes an explicitly invalid/expired refresh token from a temporary provider outage.
 Invalid tokens return 401; temporary failures return 503 so the mobile app retains the saved session and offers retry.
+
+## 8 November 2026 employer applicant/profile response update
+
+The employer applications endpoint `GET /jobs/{job_id}/applications` now includes applicant avatar URL, bio, preferred state/district/area, experience level, and selected skill names. The worker profile endpoint `GET /profile/me` now also includes a `skills` array with `{id, name}` values for display in the profile summary.
