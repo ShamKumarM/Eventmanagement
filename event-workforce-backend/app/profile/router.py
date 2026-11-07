@@ -1,9 +1,9 @@
 """Profile management endpoints for workers and employers."""
 from typing import Any
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.auth.deps import get_current_user
@@ -23,7 +23,7 @@ WORKER_REQUIRED_FIELDS = {
 def _profile_or_404(user_id: str) -> dict[str, Any]:
     result = (
         admin_db.table("profiles")
-        .select("id, full_name, phone, role, role_selected, created_at, updated_at")
+        .select("id, full_name, phone, avatar_url, role, role_selected, created_at, updated_at")
         .eq("id", user_id)
         .limit(1)
         .execute()
@@ -230,6 +230,12 @@ def get_my_profile(user=Depends(get_current_user)):
     if profile.get("role_selected") and profile.get("role") == "worker":
         response["worker_profile"] = _worker_profile(str(user.id))
         response["skill_ids"] = _worker_skill_ids(str(user.id))
+        selected_ids = response["skill_ids"]
+        if selected_ids:
+            selected = admin_db.table("skills").select("id, name").in_("id", selected_ids).order("id").execute()
+            response["skills"] = selected.data or []
+        else:
+            response["skills"] = []
     elif profile.get("role_selected") and profile.get("role") == "employer":
         response["employer_profile"] = _employer_profile(str(user.id))
     return response
@@ -261,6 +267,62 @@ def update_my_shared_profile(payload: SharedProfileUpdate, user=Depends(get_curr
     if not result.data:
         raise HTTPException(status_code=400, detail="Profile update did not return a saved record.")
     return {"message": "Profile updated successfully.", "profile": result.data[0]}
+
+
+@router.post("/avatar")
+async def upload_profile_avatar(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    """Upload a profile photo to the public profile-photos bucket."""
+    _profile_or_404(str(user.id))
+    allowed = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }
+    mime = (file.content_type or "").lower()
+    if mime not in allowed:
+        raise HTTPException(status_code=415, detail="Choose a JPG, PNG or WEBP profile photo.")
+    content = await file.read(3 * 1024 * 1024 + 1)
+    if not content:
+        raise HTTPException(status_code=422, detail="The selected profile photo is empty.")
+    if len(content) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photos must be 3 MB or smaller.")
+    signatures = {
+        "image/jpeg": content.startswith(b"\\xff\\xd8\\xff"),
+        "image/png": content.startswith(b"\\x89PNG\\r\\n\\x1a\\n"),
+        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
+    }
+    if not signatures[mime]:
+        raise HTTPException(status_code=415, detail="The file content does not match its image type.")
+
+    bucket = "profile-photos"
+    path = f"{user.id}/{uuid4().hex}{allowed[mime]}"
+    try:
+        admin_db.storage.from_(bucket).upload(
+            path, content,
+            file_options={"content-type": mime, "upsert": "true"},
+        )
+        public_url = admin_db.storage.from_(bucket).get_public_url(path)
+        saved = (
+            admin_db.table("profiles")
+            .update({"avatar_url": public_url})
+            .eq("id", str(user.id))
+            .execute()
+        )
+        if not saved.data:
+            raise RuntimeError("Profile photo URL was not saved.")
+        return {"message": "Profile photo updated successfully.", "avatar_url": public_url}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not save your profile photo. Please try again.",
+        ) from exc
+    finally:
+        await file.close()
 
 
 @router.get("/completion")
