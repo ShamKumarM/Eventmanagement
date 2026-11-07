@@ -128,3 +128,43 @@ limit 30;
 After running the migration, restart/redeploy the backend and test:
 `GET /profile/me`, `GET /profile/completion`, and all three location dropdown endpoints.
 Do not paste service-role keys or `.env` values into chat or commit them to Git.
+
+
+## Router registration audit (source ZIP reviewed)
+
+`app/main.py` imports and registers every router present in `app/`:
+- `auth.router`
+- `jobs.router`
+- `profile.router`
+- `applications.router`
+- `employer_verification.router`
+- `admin.router`
+- `recommendations.router`
+
+No router module in the supplied backend source is omitted from application startup.
+
+## Flutter source integration notes
+
+The supplied Flutter source includes authentication/session restoration, role selection,
+worker job browsing/detail/application submission, worker application listing, employer
+job creation/listing, profile editing/viewing, employer verification submission/document
+upload/status, and the admin overview/verification queue/audit list.
+
+The following backend endpoints remain intentionally API-first in this release:
+- `PATCH /jobs/{job_id}` and `POST /jobs/{job_id}/cancel` (job editing/cancellation UI)
+- `POST /applications/{application_id}/withdraw`
+- `GET /jobs/{job_id}/applications` and `PATCH /applications/{application_id}/status`
+  (employer applicant-management UI)
+- `GET /jobs/{job_id}/related` (recommendations UI)
+- Detailed admin verification review and signed-document workflow. The admin verification
+  management frontend is a separate web application; its backend routes are all registered.
+
+This distinction is deliberate: the backend router is retained and connected to FastAPI,
+but a route is not considered a finished mobile feature merely because the API exists.
+Use the endpoint table above as the checklist for remaining UI work.
+
+## Build environment
+
+Flutter SDK is required to run `flutter pub get`, `flutter analyze`, and Android builds.
+The build machine used for this source audit did not have Flutter/Dart installed, so no
+claim of a successful APK build is made. Backend Python source syntax validation passed.
