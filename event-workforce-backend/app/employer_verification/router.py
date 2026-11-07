@@ -2,6 +2,7 @@
 """Employer verification submission and private document management."""
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -115,13 +116,54 @@ def submit_verification(
 
     latest = _latest_submission(str(user.id))
 
-    if latest and latest.get("status") in {
-        "pending",
-        "needs_more_information",
-    }:
+    # Idempotent submit: retrying the button must not create duplicate requests
+    # or show a misleading failure when a pending request already exists.
+    if latest and latest.get("status") == "pending":
+        return {
+            "message": "Your verification request is already submitted.",
+            "submission": latest,
+            "already_submitted": True,
+        }
+
+    if latest and latest.get("status") == "needs_more_information":
+        # Resubmission reopens the same request after the employer has supplied
+        # the additional details/documents requested by the reviewer.
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            updated = (
+                admin_db.table("employer_verification_submissions")
+                .update({
+                    "status": "pending",
+                    "reviewed_at": None,
+                    "reviewed_by": None,
+                    "review_notes": None,
+                    "updated_at": now,
+                })
+                .eq("id", latest["id"])
+                .execute()
+            )
+            admin_db.table("employer_profiles").update(
+                {"verification_status": "pending"}
+            ).eq("user_id", str(user.id)).execute()
+            return {
+                "message": "Your updated verification request has been resubmitted.",
+                "submission": updated.data[0] if updated.data else latest,
+                "resubmitted": True,
+            }
+        except Exception:
+            logger.exception(
+                "Employer verification resubmission failed. Employer ID: %s",
+                user.id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Could not resubmit verification. Please try again.",
+            )
+
+    if latest and latest.get("status") == "approved":
         raise HTTPException(
             status_code=409,
-            detail="You already have a verification submission awaiting review.",
+            detail="Your organisation is already verified.",
         )
 
     try:

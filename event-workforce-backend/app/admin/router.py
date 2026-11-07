@@ -292,9 +292,16 @@ def review_document(
             .eq("id", str(document_id))
             .execute()
         )
+        # Database constraint uses "accepted" rather than "approved" for
+        # accepted document reviews. Keep API wording user-friendly.
+        document_action = (
+            "verification_document_accepted"
+            if payload.decision == "approved"
+            else "verification_document_rejected"
+        )
         _audit(
             str(user.id),
-            f"verification_document_{payload.decision}",
+            document_action,
             employer_id=document["employer_user_id"],
             submission_id=document["submission_id"],
             document_id=str(document_id),
@@ -367,9 +374,14 @@ def review_verification(
             "verification_status": payload.decision
         }).eq("user_id", submission["employer_user_id"]).execute()
 
+        verification_actions = {
+            "approved": "verification_approved",
+            "rejected": "verification_rejected",
+            "needs_more_information": "verification_more_information_requested",
+        }
         _audit(
             str(user.id),
-            f"employer_verification_{payload.decision}",
+            verification_actions[payload.decision],
             employer_id=submission["employer_user_id"],
             submission_id=str(submission_id),
             details={"notes": payload.notes},

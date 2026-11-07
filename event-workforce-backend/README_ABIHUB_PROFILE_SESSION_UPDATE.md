@@ -1,26 +1,27 @@
 # AbiHub profile, location and session update
 
-## Database migration
+## Required production migration
 
-Run these SQL files in Supabase SQL Editor in this order:
+The deployed server log showed PostgreSQL error `42703`: `worker_profiles.preferred_state` does not exist.
+This means the SQL migration has not been run in the Supabase database used by the deployed backend.
 
-1. `003_job_location_dropdowns.sql` (if it has not already been run)
-2. `004_worker_preferred_location.sql`
+Run in the Supabase SQL Editor for the project configured in Render:
+1. `003_job_location_dropdowns.sql` if location tables are not already present.
+2. `004_worker_preferred_location.sql` (required).
 
-Migration 004 adds `preferred_state` and `preferred_district` to `worker_profiles`, seeds the legacy Coimbatore-wide locality option, and backfills existing Coimbatore preferences so existing accounts can reopen the new dropdowns without losing their saved area.
+Verify both `preferred_state` and `preferred_district` exist in `public.worker_profiles` before retesting the app.
+See `API_MODULE_CONNECTION_MAP.md` for the verification SQL and complete route-to-screen map.
 
-## Updated worker profile API
+## Profile API
 
-`GET /profile/me` and `GET /profile/worker` now include:
+Worker profile reads and updates now return an actionable 503 message if the new location columns are missing,
+instead of a generic server error. Experience-level values are validated against the database values:
+`fresher`, `less_than_1_year`, `1_to_3_years`, `3_to_5_years`, and `5_plus_years`.
+The Flutter app shows friendly labels but submits those exact values.
 
-- `preferred_state`
-- `preferred_district`
-- `preferred_area`
-
-`PATCH /profile/worker` validates the state → district → area relationship when all three are submitted. The mobile app sends all three values together.
-
-`PUT /profile/skills` accepts an empty `skill_ids` array so a worker can remove all selected skills. Non-empty values are still checked against the `skills` table.
+`PUT /profile/skills` accepts an empty `skill_ids` array so a worker can remove all selected skills.
 
 ## Session refresh
 
-`POST /auth/refresh` now distinguishes an explicitly invalid/expired refresh token from a temporary Supabase/provider outage. Invalid tokens return 401; temporary failures return 503 so the mobile app can retain the saved session and offer retry rather than forcing sign-in.
+`POST /auth/refresh` distinguishes an explicitly invalid/expired refresh token from a temporary provider outage.
+Invalid tokens return 401; temporary failures return 503 so the mobile app retains the saved session and offers retry.

@@ -42,13 +42,27 @@ def _require_role(profile: dict, role: str) -> None:
 
 
 def _worker_profile(user_id: str) -> dict[str, Any]:
-    result = (
-        admin_db.table("worker_profiles")
-        .select("user_id, bio, preferred_state, preferred_district, preferred_area, preferred_radius_km, is_available, experience_level, created_at")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        result = (
+            admin_db.table("worker_profiles")
+            .select("user_id, bio, preferred_state, preferred_district, preferred_area, preferred_radius_km, is_available, experience_level, created_at")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        if getattr(exc, "code", None) == "42703" or "preferred_state" in str(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Worker location fields are not installed in the database yet. "
+                    "Run 004_worker_preferred_location.sql in the Supabase project used by this API, then retry."
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Could not load your worker profile. Please try again.",
+        ) from exc
     if not result.data:
         # This should normally be created by the role-selection RPC.
         raise HTTPException(status_code=404, detail="Worker profile not found.")
@@ -122,6 +136,25 @@ class WorkerProfileUpdate(BaseModel):
     preferred_radius_km: int | None = Field(default=None, ge=1, le=100)
     is_available: bool | None = None
     experience_level: str | None = Field(default=None, min_length=2, max_length=100)
+
+    @field_validator("experience_level")
+    @classmethod
+    def validate_experience_level(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        allowed = {
+            "fresher",
+            "less_than_1_year",
+            "1_to_3_years",
+            "3_to_5_years",
+            "5_plus_years",
+        }
+        cleaned = " ".join(value.split())
+        if cleaned not in allowed:
+            raise ValueError(
+                "Choose Fresher, Less than 1 year, 1–3 years, 3–5 years, or 5+ years."
+            )
+        return cleaned
 
     @field_validator("bio", "preferred_state", "preferred_district", "preferred_area", "experience_level")
     @classmethod
@@ -324,12 +357,19 @@ def update_worker_profile(payload: WorkerProfileUpdate, user=Depends(get_current
             .eq("user_id", str(user.id))
             .execute()
         )
-    except Exception as e:
-        print(f"Worker profile update failed: {e!r}")
+    except Exception as exc:
+        if getattr(exc, "code", None) == "42703" or "preferred_state" in str(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Worker location fields are not installed in the database yet. "
+                    "Run 004_worker_preferred_location.sql in the Supabase project used by this API, then retry."
+                ),
+            ) from exc
         raise HTTPException(
-            status_code=500,
-            detail="Could not update worker profile."
-        )
+            status_code=503,
+            detail="Could not update your worker profile. Please check the fields and try again.",
+        ) from exc
     if not result.data:
         raise HTTPException(status_code=400, detail="Worker profile update did not return a saved record.")
     return {"message": "Worker profile updated successfully.", "worker_profile": result.data[0]}
