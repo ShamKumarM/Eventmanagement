@@ -13,14 +13,14 @@ from app.applications.deps import get_current_worker   # reuse the shared worker
 from app.auth.db import admin_db
 from app.auth.deps import get_current_user
 from app.jobs.schemas import JobStatus, today_ist
-from app.jobs.reactions import attach_reaction_counts
+from app.jobs.reactions import attach_reaction_counts, attach_employer_names
 
 from .geo import RADIUS_KM, rank_nearby, resolve_area
 
 router = APIRouter(tags=["recommendations"])
 
 JOB_COLUMNS = (
-    "id, title, category_id, job_date, start_time, end_time, workers_required, "
+    "id, employer_id, title, category_id, job_date, start_time, end_time, workers_required, "
     "salary_per_worker, payment_type, area, city, latitude, longitude"
 )
 CANDIDATE_LIMIT = 200   # MVP: filter by distance in Python; move to SQL if the table grows large
@@ -137,7 +137,7 @@ def worker_home_recommendations(
     query = (
         admin_db.table("jobs")
         .select(
-            "id, title, category_id, description, job_date, reporting_time, "
+            "id, employer_id, title, category_id, description, job_date, reporting_time, "
             "start_time, end_time, workers_required, salary_per_worker, "
             "payment_type, venue_name, address, area, city, district, state, "
             "food_provided, transport_provided, dress_code, status, "
@@ -260,6 +260,7 @@ def worker_home_recommendations(
         for group in section:
             for item in group.get("items", []):
                 unique_jobs[str(item["id"])] = item
+    attach_employer_names(list(unique_jobs.values()))
     attach_reaction_counts(list(unique_jobs.values()), user_id)
 
     return {

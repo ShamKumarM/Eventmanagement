@@ -43,3 +43,42 @@ def attach_reaction_counts(rows: list[dict], user_id: str | None = None) -> list
         row["dislikes_count"] = counts[job_id]["dislikes"]
         row["my_reaction"] = mine.get(job_id)
     return rows
+
+
+def attach_employer_names(rows: list[dict]) -> list[dict]:
+    """Add a human-readable employer name without exposing private profile data."""
+    if not rows:
+        return rows
+    user_ids = sorted({str(row.get("employer_id")) for row in rows if row.get("employer_id")})
+    if not user_ids:
+        return rows
+    names = {}
+    try:
+        org_rows = (
+            db.table("employer_profiles")
+            .select("user_id, organisation_name")
+            .in_("user_id", user_ids)
+            .execute()
+        ).data or []
+        for item in org_rows:
+            if item.get("organisation_name"):
+                names[str(item["user_id"])] = str(item["organisation_name"])
+    except Exception:
+        pass
+    missing = [uid for uid in user_ids if uid not in names]
+    if missing:
+        try:
+            profile_rows = (
+                db.table("profiles")
+                .select("id, full_name")
+                .in_("id", missing)
+                .execute()
+            ).data or []
+            for item in profile_rows:
+                if item.get("full_name"):
+                    names[str(item["id"])] = str(item["full_name"])
+        except Exception:
+            pass
+    for row in rows:
+        row["employer_name"] = names.get(str(row.get("employer_id")), "Verified event employer")
+    return rows

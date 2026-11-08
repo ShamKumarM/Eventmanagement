@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ValidationError
 
 from .db import db
-from .reactions import attach_reaction_counts
+from .reactions import attach_reaction_counts, attach_employer_names
 from .deps import get_current_employer, get_current_user
 from .schemas import (
     JOB_FIELDS,
@@ -196,6 +196,7 @@ def my_jobs(
     start = (page - 1) * page_size
     res = q.order("job_date", desc=True).range(start, start + page_size - 1).execute()
     items = with_positions(res.data)
+    attach_employer_names(items)
     attach_reaction_counts(items, str(user.id))
     return {"total": res.count, "page": page, "items": items}
 
@@ -335,6 +336,7 @@ def job_feed(
         rows, total = res.data, res.count
 
     items = with_positions(rows)
+    attach_employer_names(items)
     attach_reaction_counts(items, str(user.id))
     return {"total": total, "page": page, "items": items}
 
@@ -376,5 +378,6 @@ def job_detail(job_id: UUID, user=Depends(get_current_user)):
     if job["status"] == JobStatus.draft.value and job["employer_id"] != str(user.id):
         raise HTTPException(404, "Job not found")
     item = with_positions([job])[0]
+    attach_employer_names([item])
     attach_reaction_counts([item], str(user.id))
     return item
