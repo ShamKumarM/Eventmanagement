@@ -258,6 +258,7 @@ def job_feed(
     category_id: Optional[list[int]] = Query(None),
     city: Optional[str] = None,
     area: Optional[str] = None,
+    sort_by: Literal["recent", "earliest", "salary"] = "recent",
     date_filter: Optional[Literal["today", "tomorrow", "weekend"]] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
@@ -293,9 +294,9 @@ def job_feed(
     if category_id:
         q = q.in_("category_id", category_id)
     if city:
-        q = q.ilike("city", city)
+        q = q.ilike("city", f"%{city}%")
     if area:
-        q = q.ilike("area", area)
+        q = q.ilike("area", f"%{area}%")
     if min_salary is not None:
         q = q.gte("salary_per_worker", min_salary)
     if max_salary is not None:
@@ -304,7 +305,12 @@ def job_feed(
         parts = [p for t in time_of_day for p in TIME_BUCKETS[t]]
         q = q.or_(",".join(parts))
 
-    q = q.order("job_date").order("start_time")
+    if sort_by == "salary":
+        q = q.order("salary_per_worker", desc=True).order("created_at", desc=True)
+    elif sort_by == "earliest":
+        q = q.order("job_date").order("start_time")
+    else:
+        q = q.order("created_at", desc=True).order("job_date")
     start = (page - 1) * page_size
 
     # distance filter: bounding box in SQL, exact Haversine in Python

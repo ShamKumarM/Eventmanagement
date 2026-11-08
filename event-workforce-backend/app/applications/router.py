@@ -104,12 +104,8 @@ def my_applications(
     jobs = {}
     if rows:
         job_rows = (
-            admin_db.table("jobs").select(
-                "id, title, category_id, job_categories(name), description, job_date, "
-                "reporting_time, start_time, end_time, area, district, city, state, "
-                "venue_name, address, salary_per_worker, workers_required, "
-                "food_provided, transport_provided, dress_code, status"
-            ).in_("id", list({r["job_id"] for r in rows})).execute().data
+            admin_db.table("jobs").select("id, title, job_date, start_time, area, city, salary_per_worker, status")
+            .in_("id", list({r["job_id"] for r in rows})).execute().data
         )
         jobs = {j["id"]: j for j in job_rows}
     for r in rows:
@@ -155,50 +151,16 @@ def applications_for_job(
     # Attach applicant details (columns confirmed from the Profile module).
     if rows:
         ids = [r["worker_id"] for r in rows]
-        people = {
-            p["id"]: p
-            for p in admin_db.table("profiles")
-            .select("id, full_name, phone, avatar_url")
-            .in_("id", ids).execute().data
-        }
-        wp = {
-            w["user_id"]: w
-            for w in admin_db.table("worker_profiles")
-            .select("user_id, bio, preferred_state, preferred_district, preferred_area, experience_level")
-            .in_("user_id", ids).execute().data
-        }
-        skill_links = (
-            admin_db.table("worker_profile_skills")
-            .select("user_id, skill_id")
-            .in_("user_id", ids).execute().data
-        )
-        skill_ids_by_user = {}
-        for link in skill_links:
-            skill_ids_by_user.setdefault(link["user_id"], []).append(link["skill_id"])
-        all_skill_ids = sorted({sid for values in skill_ids_by_user.values() for sid in values})
-        skill_names = {}
-        if all_skill_ids:
-            skill_names = {
-                item["id"]: item["name"]
-                for item in admin_db.table("skills").select("id, name")
-                .in_("id", all_skill_ids).execute().data
-            }
+        people = {p["id"]: p for p in admin_db.table("profiles").select("id, full_name, phone").in_("id", ids).execute().data}
+        wp = {w["user_id"]: w for w in admin_db.table("worker_profiles")
+              .select("user_id, preferred_area, experience_level").in_("user_id", ids).execute().data}
         for r in rows:
             p, w = people.get(r["worker_id"], {}), wp.get(r["worker_id"], {})
             r["applicant"] = {
                 "full_name": p.get("full_name"),
                 "phone": p.get("phone"),
-                "avatar_url": p.get("avatar_url"),
-                "bio": w.get("bio"),
-                "preferred_state": w.get("preferred_state"),
-                "preferred_district": w.get("preferred_district"),
                 "preferred_area": w.get("preferred_area"),
                 "experience_level": w.get("experience_level"),
-                "skills": [
-                    skill_names[sid]
-                    for sid in skill_ids_by_user.get(r["worker_id"], [])
-                    if sid in skill_names
-                ],
             }
     return {"job_id": str(job_id), "total": res.count, "page": page, "items": rows}
 

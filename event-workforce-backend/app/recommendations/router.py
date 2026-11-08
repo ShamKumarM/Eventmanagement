@@ -88,6 +88,9 @@ def related_jobs(
 @router.get("/recommendations/home")
 def worker_home_recommendations(
     city: str | None = None,
+    area: str | None = None,
+    skill_id: list[int] | None = Query(None),
+    sort_by: str = Query("recent", pattern="^(recent|salary)$"),
     user=Depends(get_current_user),
 ):
     """Return separate home-feed sections based on worker skills, location and experience."""
@@ -118,15 +121,11 @@ def worker_home_recommendations(
         .execute()
     ).data or []
     skill_ids = sorted({int(row["skill_id"]) for row in selected_rows})
-    skills = []
-    if skill_ids:
-        skills = (
-            admin_db.table("skills")
-            .select("id, name")
-            .in_("id", skill_ids)
-            .order("id")
-            .execute()
-        ).data or []
+    available_skills = (
+        admin_db.table("skills").select("id, name").order("id").execute()
+    ).data or []
+    section_skill_ids = skill_id if skill_id else skill_ids
+    skills = [row for row in available_skills if int(row["id"]) in set(section_skill_ids)]
 
     query = (
         admin_db.table("jobs")
@@ -134,17 +133,23 @@ def worker_home_recommendations(
             "id, title, category_id, description, job_date, reporting_time, "
             "start_time, end_time, workers_required, salary_per_worker, "
             "payment_type, venue_name, address, area, city, district, state, "
-            "food_provided, transport_provided, dress_code, status, "
+            "food_provided, transport_provided, dress_code, status, created_at, "
             "job_categories(name)"
         )
         .eq("status", JobStatus.open.value)
         .gte("job_date", today_ist().isoformat())
-        .order("job_date")
         .limit(150)
     )
     selected_city = (city or "").strip()
+    selected_area = (area or "").strip()
     if selected_city:
         query = query.ilike("city", f"%{selected_city}%")
+    if selected_area:
+        query = query.ilike("area", f"%{selected_area}%")
+    if sort_by == "salary":
+        query = query.order("salary_per_worker", desc=True).order("created_at", desc=True)
+    else:
+        query = query.order("created_at", desc=True).order("job_date")
     jobs = query.execute().data or []
 
     def searchable(job: dict) -> str:
@@ -234,7 +239,7 @@ def worker_home_recommendations(
         "preferred_city": preferred_district or None,
         "experience_level": experience,
         "experience_label": experience_labels.get(experience, experience.replace("_", " ").title()),
-        "skills": skills,
+        "skills": available_skills,
         "sections": {
             "skills": skill_sections,
             "location": location_jobs[:20],
