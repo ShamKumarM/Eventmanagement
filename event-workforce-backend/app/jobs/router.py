@@ -243,6 +243,31 @@ def update_job(job_id: UUID, payload: JobUpdate, user=Depends(get_current_employ
     return res.data[0]
 
 
+@router.delete("/jobs/{job_id}", status_code=200)
+def delete_job(job_id: UUID, user=Depends(get_current_employer)):
+    """Permanently remove an employer-owned job posting."""
+    job = get_job_or_404(job_id)
+    require_owner(job, user)
+    try:
+        result = (
+            db.table("jobs")
+            .delete()
+            .eq("id", str(job_id))
+            .select("id")
+            .eq("employer_id", str(user.id))
+            .execute()
+        )
+    except Exception as exc:
+        # Keep application history safe if the database has restrictive references.
+        raise HTTPException(
+            status_code=409,
+            detail="This job has related records and cannot be permanently deleted. Close or cancel it instead.",
+        ) from exc
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Job not found or already deleted.")
+    return {"message": "Job posting deleted", "job_id": str(job_id)}
+
+
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: UUID, user=Depends(get_current_employer)):
     job = get_job_or_404(job_id)
