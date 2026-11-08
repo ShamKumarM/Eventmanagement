@@ -135,3 +135,14 @@ Use Postman, not Swagger, for testing.
 The updated worker profile stores `preferred_state`, `preferred_district`, and `preferred_area`. Run `004_worker_preferred_location.sql` after the job location migration `003_job_location_dropdowns.sql` before deploying the updated API. The mobile app loads the same authenticated location endpoints used by job creation and submits the three selected names together.
 
 The profile API validates that the selected district belongs to the selected state and the selected area belongs to the selected district. `PUT /profile/skills` also accepts an empty `skill_ids` list so a worker can remove all previously selected skills.
+
+## Worker home recommendations filters
+
+`GET /recommendations/home` now accepts optional filters:
+
+- `skill_id`: an ID from `GET /skills`
+- `city`: partial, case-insensitive match against city, district or state
+- `area`: partial, case-insensitive match against job area/locality
+- `sort_by`: `recent` (default) or `upcoming`
+
+Example: `/recommendations/home?skill_id=3&city=Coimbatore&area=Peelamedu&sort_by=recent`.
