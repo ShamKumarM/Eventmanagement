@@ -5,9 +5,10 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from .db import db
+from .reactions import attach_reaction_counts
 from .deps import get_current_employer, get_current_user
 from .schemas import (
     JOB_FIELDS,
@@ -19,6 +20,12 @@ from .schemas import (
 )
 
 router = APIRouter(tags=["jobs"])
+
+
+class JobReactionPayload(BaseModel):
+    vote: int = Field(..., ge=-1, le=1)
+
+
 
 SELECT = "*, job_categories(name)"
 EDITABLE = {JobStatus.draft.value, JobStatus.open.value}
@@ -188,7 +195,9 @@ def my_jobs(
         q = q.eq("status", status.value)
     start = (page - 1) * page_size
     res = q.order("job_date", desc=True).range(start, start + page_size - 1).execute()
-    return {"total": res.count, "page": page, "items": with_positions(res.data)}
+    items = with_positions(res.data)
+    attach_reaction_counts(items, str(user.id))
+    return {"total": res.count, "page": page, "items": items}
 
 
 @router.patch("/jobs/{job_id}")
@@ -325,7 +334,40 @@ def job_feed(
         res = q.range(start, start + page_size - 1).execute()
         rows, total = res.data, res.count
 
-    return {"total": total, "page": page, "items": with_positions(rows)}
+    items = with_positions(rows)
+    attach_reaction_counts(items, str(user.id))
+    return {"total": total, "page": page, "items": items}
+
+
+@router.put("/jobs/{job_id}/reaction")
+def react_to_job(
+    job_id: UUID,
+    payload: JobReactionPayload,
+    user=Depends(get_current_user),
+):
+    """Set a worker's reaction: 1=like, -1=dislike, 0=clear reaction."""
+    job = get_job_or_404(job_id)
+    if job.get("status") != JobStatus.open.value or job.get("job_date", "") < today_ist().isoformat():
+        raise HTTPException(409, "This event opportunity is no longer active.")
+
+    user_id = str(user.id)
+    existing = (
+        db.table("job_reactions").select("id")
+        .eq("job_id", str(job_id)).eq("user_id", user_id).limit(1).execute()
+    ).data or []
+
+    if payload.vote == 0:
+        if existing:
+            db.table("job_reactions").delete().eq("id", existing[0]["id"]).execute()
+    elif existing:
+        db.table("job_reactions").update({"vote": payload.vote}).eq("id", existing[0]["id"]).execute()
+    else:
+        db.table("job_reactions").insert({
+            "job_id": str(job_id), "user_id": user_id, "vote": payload.vote,
+        }).execute()
+
+    result = attach_reaction_counts([{"id": str(job_id)}], user_id)[0]
+    return result
 
 
 @router.get("/jobs/{job_id}")
@@ -333,4 +375,6 @@ def job_detail(job_id: UUID, user=Depends(get_current_user)):
     job = get_job_or_404(job_id)
     if job["status"] == JobStatus.draft.value and job["employer_id"] != str(user.id):
         raise HTTPException(404, "Job not found")
-    return with_positions([job])[0]
+    item = with_positions([job])[0]
+    attach_reaction_counts([item], str(user.id))
+    return item

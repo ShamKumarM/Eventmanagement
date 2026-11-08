@@ -13,6 +13,7 @@ from app.applications.deps import get_current_worker   # reuse the shared worker
 from app.auth.db import admin_db
 from app.auth.deps import get_current_user
 from app.jobs.schemas import JobStatus, today_ist
+from app.jobs.reactions import attach_reaction_counts
 
 from .geo import RADIUS_KM, rank_nearby, resolve_area
 
@@ -78,6 +79,7 @@ def related_jobs(
     for item in items:
         item["already_applied"] = item["id"] in applied
 
+    attach_reaction_counts(items, user_id)
     return {
         **base,
         "worker_location": {"area": area, "latitude": origin[0], "longitude": origin[1]},
@@ -90,6 +92,7 @@ def worker_home_recommendations(
     city: str | None = None,
     area: str | None = None,
     skill: str | None = None,
+    search: str | None = None,
     sort_by: str = Query("date", pattern="^(date|recent|pay)$"),
     user=Depends(get_current_user),
 ):
@@ -165,6 +168,10 @@ def worker_home_recommendations(
             str(job.get("title") or ""),
             str(job.get("description") or ""),
             str(category_name),
+            str(job.get("venue_name") or ""),
+            str(job.get("area") or ""),
+            str(job.get("district") or ""),
+            str(job.get("city") or ""),
         ]).lower()
 
     def score_for_skill(job: dict, skill_name: str) -> int:
@@ -180,6 +187,10 @@ def worker_home_recommendations(
     requested_skill = (skill or "").strip().lower()
     if requested_skill:
         jobs = [job for job in jobs if requested_skill in searchable(job)]
+
+    search_term = (search or "").strip().lower()
+    if search_term:
+        jobs = [job for job in jobs if search_term in searchable(job)]
 
     skill_sections = []
     for skill in skills:
@@ -244,11 +255,18 @@ def worker_home_recommendations(
     if not experience_jobs:
         experience_jobs = jobs[:]
 
+    unique_jobs = {}
+    for section in [skill_sections, [{"items": location_jobs}], [{"items": experience_jobs}], [{"items": jobs}]]:
+        for group in section:
+            for item in group.get("items", []):
+                unique_jobs[str(item["id"])] = item
+    attach_reaction_counts(list(unique_jobs.values()), user_id)
+
     return {
         "preferred_area": preferred_area or None,
         "preferred_city": preferred_district or None,
         "filters": {"city": selected_city or None, "area": selected_area or None,
-                    "skill": requested_skill or None, "sort_by": sort_by},
+                    "skill": requested_skill or None, "search": search_term or None, "sort_by": sort_by},
         "experience_level": experience,
         "experience_label": experience_labels.get(experience, experience.replace("_", " ").title()),
         "skills": skills,
