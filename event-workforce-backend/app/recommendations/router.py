@@ -6,7 +6,6 @@ Jobs related to the one the worker opened: same category, open, not past, not th
 same job, and within 20 km of the worker's preferred_area.
 """
 from uuid import UUID
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -90,8 +89,8 @@ def related_jobs(
 def worker_home_recommendations(
     city: str | None = None,
     area: str | None = None,
-    skill_id: int | None = Query(None, ge=1),
-    sort_by: Literal["recent", "upcoming"] = "recent",
+    skill: str | None = None,
+    sort_by: str = Query("date", pattern="^(date|recent|pay)$"),
     user=Depends(get_current_user),
 ):
     """Return separate home-feed sections based on worker skills, location and experience."""
@@ -131,14 +130,6 @@ def worker_home_recommendations(
             .order("id")
             .execute()
         ).data or []
-    if skill_id is not None:
-        filter_skill = (
-            admin_db.table("skills").select("id, name")
-            .eq("id", skill_id).limit(1).execute()
-        ).data or []
-        if not filter_skill:
-            raise HTTPException(status_code=422, detail="Choose a valid skill from the filter list.")
-        skills = filter_skill
 
     query = (
         admin_db.table("jobs")
@@ -146,26 +137,26 @@ def worker_home_recommendations(
             "id, title, category_id, description, job_date, reporting_time, "
             "start_time, end_time, workers_required, salary_per_worker, "
             "payment_type, venue_name, address, area, city, district, state, "
-            "food_provided, transport_provided, dress_code, status, created_at, "
+            "food_provided, transport_provided, dress_code, status, "
             "job_categories(name)"
         )
         .eq("status", JobStatus.open.value)
         .gte("job_date", today_ist().isoformat())
-        .limit(300)
+        .limit(150)
     )
-    jobs = query.execute().data or []
-    selected_city = (city or "").strip().lower()
-    selected_area = (area or "").strip().lower()
+    selected_city = (city or "").strip()
+    selected_area = (area or "").strip()
     if selected_city:
-        jobs = [job for job in jobs if selected_city in " ".join([
-            str(job.get("city") or ""), str(job.get("district") or ""),
-            str(job.get("state") or "")]).lower()]
+        query = query.ilike("city", f"%{selected_city}%")
     if selected_area:
-        jobs = [job for job in jobs if selected_area in str(job.get("area") or "").lower()]
+        query = query.ilike("area", f"%{selected_area}%")
     if sort_by == "recent":
-        jobs.sort(key=lambda job: str(job.get("created_at") or ""), reverse=True)
+        query = query.order("created_at", desc=True)
+    elif sort_by == "pay":
+        query = query.order("salary_per_worker", desc=True)
     else:
-        jobs.sort(key=lambda job: (str(job.get("job_date") or ""), str(job.get("start_time") or "")))
+        query = query.order("job_date")
+    jobs = query.execute().data or []
 
     def searchable(job: dict) -> str:
         category = job.get("job_categories") or {}
@@ -186,9 +177,9 @@ def worker_home_recommendations(
         tokens = [token for token in needle.split() if len(token) > 2]
         return sum(15 for token in tokens if token in text)
 
-    if skill_id is not None and skills:
-        selected_skill_name = str(skills[0].get("name") or "")
-        jobs = [job for job in jobs if score_for_skill(job, selected_skill_name) > 0]
+    requested_skill = (skill or "").strip().lower()
+    if requested_skill:
+        jobs = [job for job in jobs if requested_skill in searchable(job)]
 
     skill_sections = []
     for skill in skills:
@@ -197,12 +188,10 @@ def worker_home_recommendations(
             if score_for_skill(job, str(skill.get("name") or "")) > 0
         ]
         matching.sort(
-            key=lambda job: str(job.get("created_at") or "") if sort_by == "recent" else str(job.get("job_date") or ""),
-            reverse=(sort_by == "recent"),
-        )
-        matching.sort(
-            key=lambda job: score_for_skill(job, str(skill.get("name") or "")),
-            reverse=True,
+            key=lambda job: (
+                -score_for_skill(job, str(skill.get("name") or "")),
+                str(job.get("job_date") or ""),
+            )
         )
         if matching:
             skill_sections.append({
@@ -256,9 +245,10 @@ def worker_home_recommendations(
         experience_jobs = jobs[:]
 
     return {
-        "filters": {"city": city or None, "area": area or None, "skill_id": skill_id, "sort_by": sort_by},
         "preferred_area": preferred_area or None,
         "preferred_city": preferred_district or None,
+        "filters": {"city": selected_city or None, "area": selected_area or None,
+                    "skill": requested_skill or None, "sort_by": sort_by},
         "experience_level": experience,
         "experience_label": experience_labels.get(experience, experience.replace("_", " ").title()),
         "skills": skills,

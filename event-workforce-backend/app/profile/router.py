@@ -8,6 +8,10 @@ try:
     register_heif_opener()
 except ImportError:
     pass
+try:
+    import pillow_avif  # noqa: F401 - registers AVIF support with Pillow
+except ImportError:
+    pass
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -307,6 +311,9 @@ async def upload_profile_avatar(
             except EOFError:
                 pass
             image = image.convert("RGB")
+            # A consistent square crop makes the uploaded portrait display cleanly
+            # in the circular avatar used by both worker and employer screens.
+            image = ImageOps.fit(image, (900, 900), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
             output = BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
             jpeg_content = output.getvalue()
