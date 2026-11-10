@@ -131,7 +131,24 @@ def list_categories(user=Depends(get_current_user)):
         db.table("job_categories").select("id, name")
         .eq("is_active", True).order("id").execute()
     )
-    return res.data
+    categories = res.data or []
+    if not categories:
+        return []
+    role_rows = (
+        db.table("job_category_roles")
+        .select("category_id, role_name")
+        .in_("category_id", [row["id"] for row in categories])
+        .eq("is_active", True)
+        .order("sort_order")
+        .execute()
+    ).data or []
+    roles_by_category: dict[int, list[str]] = {}
+    for row in role_rows:
+        roles_by_category.setdefault(int(row["category_id"]), []).append(row["role_name"])
+    return [
+        {**category, "roles": roles_by_category.get(int(category["id"]), [])}
+        for category in categories
+    ]
 
 
 @router.get("/locations/states")

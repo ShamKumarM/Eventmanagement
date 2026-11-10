@@ -46,7 +46,7 @@ class JobBase(BaseModel):
     job_date: date
     reporting_time: time
     start_time: time
-    end_time: time
+    end_time: Optional[time] = None
 
     workers_required: int = Field(ge=1, le=1000)
     salary_per_worker: float = Field(gt=0, le=100000)
