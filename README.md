@@ -1,17 +1,23 @@
-# event_management
+# Event Workforce Platform
 
-A new Flutter project.
+This checkout contains the FastAPI backend for the event workforce platform, backed by Supabase Auth, Postgres, and Storage. The Flutter app source is not included in this checkout.
 
-## Getting Started
+## Run the backend locally
 
-This project is a starting point for a Flutter application.
+1. Install dependencies from `event-workforce-backend/requirements.txt`.
+2. Copy `event-workforce-backend/.env.example` to `event-workforce-backend/.env` and set the Supabase URL, public key, service-role key, and recovery redirect URL. Keep `.env` private.
+3. Start the API from the backend directory:
 
-A few resources to get you started if this is your first Flutter project:
+   ```powershell
+   cd event-workforce-backend
+   python -m uvicorn app.main:app --reload
+   ```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+4. Open `http://127.0.0.1:8000/docs` or check `http://127.0.0.1:8000/health`.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## API and database notes
+
+- API routes and integration notes: [API_MODULE_CONNECTION_MAP.md](event-workforce-backend/API_MODULE_CONNECTION_MAP.md)
+- Worker connections and chat: [README_SOCIAL.md](event-workforce-backend/README_SOCIAL.md)
+- Employer follows and contact sharing: [README_EMPLOYER_FOLLOW.md](event-workforce-backend/README_EMPLOYER_FOLLOW.md)
+- SQL setup files are applied to Supabase manually; deploying Python does not apply migrations automatically.

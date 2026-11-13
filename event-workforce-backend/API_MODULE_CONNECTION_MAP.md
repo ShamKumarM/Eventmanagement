@@ -71,6 +71,40 @@ The Flutter form displays human-readable labels while sending these exact values
 The employer submit operation is idempotent for an already-pending request. Repeated taps do not create duplicate submissions.
 Document uploads require a pending or needs-more-information submission.
 
+## Employer discovery and contact access (`/employer-follow`)
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/employer-follow/employers` | Search public employer cards |
+| GET | `/employer-follow/employers/most-followed` | List employers by follower count |
+| GET | `/employer-follow/employers/{employer_id}` | Read public employer profile |
+| POST | `/employer-follow/employers/{employer_id}/follow` | Follow an employer |
+| DELETE | `/employer-follow/employers/{employer_id}/follow` | Unfollow an employer |
+| GET | `/employer-follow/employers/me/following` | List followed employers (worker) |
+| GET | `/employer-follow/employers/me/followers` | List followers (employer; names/photos only) |
+| POST | `/employer-follow/employers/{employer_id}/contact-requests` | Request employer contact access |
+| GET | `/employer-follow/contact-requests/mine` | Check sent contact requests (worker) |
+| POST | `/employer-follow/contact-requests/{request_id}/cancel` | Cancel a pending request (worker) |
+| GET | `/employer-follow/contact-requests/incoming` | Review incoming requests (employer) |
+| POST | `/employer-follow/contact-requests/{request_id}/respond` | Accept, reject, or revoke contact access (employer) |
+| GET | `/employer-follow/employers/{employer_id}/contact` | Read private contact after acceptance |
+
+Apply `010_employer_follow_and_contact_access.sql` before deploying these routes. Public employer cards never include phone/email/contact-person/address; those are returned only to a worker with an accepted contact request. Follower count and the admin-controlled verified badge are independent.
+
+## Worker connections and chat (`/social`)
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/social/workers` | Find workers by name for connection requests |
+| POST | `/social/friend-requests` | Send a worker connection request |
+| GET | `/social/friend-requests` | List incoming or outgoing pending requests |
+| POST | `/social/friend-requests/{request_id}/respond` | Accept, reject, or cancel a request |
+| GET | `/social/friends` | List accepted worker connections |
+| DELETE | `/social/friends/{worker_id}` | Remove an accepted connection |
+| GET | `/social/chats` | List direct chats for accepted connections |
+| GET | `/social/chats/{worker_id}/messages` | Read paginated chat messages |
+| POST | `/social/chats/{worker_id}/messages` | Send text or share an active job card |
+
+All social routes require a selected worker account. Chat access requires an accepted connection. Apply `009_worker_social.sql` before deploying the new routes. The checked-out workspace does not include the Flutter source tree, so the mobile connection/chat screens must be integrated in that app separately.
+
 ## Admin (`/admin`)
 | Method | Route | Purpose | Flutter usage |
 |---|---|---|---|
@@ -130,7 +164,7 @@ After running the migration, restart/redeploy the backend and test:
 Do not paste service-role keys or `.env` values into chat or commit them to Git.
 
 
-## Router registration audit (source ZIP reviewed)
+## Router registration audit
 
 `app/main.py` imports and registers every router present in `app/`:
 - `auth.router`
@@ -140,31 +174,17 @@ Do not paste service-role keys or `.env` values into chat or commit them to Git.
 - `employer_verification.router`
 - `admin.router`
 - `recommendations.router`
+- `social.router`
+- `employer_follow.router`
 
 No router module in the supplied backend source is omitted from application startup.
 
-## Flutter source integration notes
+## Client integration notes
 
-The supplied Flutter source includes authentication/session restoration, role selection,
-worker job browsing/detail/application submission, worker application listing, employer
-job creation/listing, profile editing/viewing, employer verification submission/document
-upload/status, and the admin overview/verification queue/audit list.
+This checkout contains the FastAPI backend but no Flutter source tree. The UI labels in
+the route tables describe intended app destinations; they are not evidence that those
+screens are present in this repository.
 
-The following backend endpoints remain intentionally API-first in this release:
-- `PATCH /jobs/{job_id}` and `POST /jobs/{job_id}/cancel` (job editing/cancellation UI)
-- `POST /applications/{application_id}/withdraw`
-- `GET /jobs/{job_id}/applications` and `PATCH /applications/{application_id}/status`
-  (employer applicant-management UI)
-- `GET /jobs/{job_id}/related` (recommendations UI)
-- Detailed admin verification review and signed-document workflow. The admin verification
-  management frontend is a separate web application; its backend routes are all registered.
-
-This distinction is deliberate: the backend router is retained and connected to FastAPI,
-but a route is not considered a finished mobile feature merely because the API exists.
-Use the endpoint table above as the checklist for remaining UI work.
-
-## Build environment
-
-Flutter SDK is required to run `flutter pub get`, `flutter analyze`, and Android builds.
-The build machine used for this source audit did not have Flutter/Dart installed, so no
-claim of a successful APK build is made. Backend Python source syntax validation passed.
+No Flutter source or build metadata is present in this checkout, so mobile screen
+integration and APK builds cannot be confirmed from this repository. The routes in
+the tables above describe backend capabilities only.
