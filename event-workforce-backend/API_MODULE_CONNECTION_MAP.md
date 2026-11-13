@@ -188,3 +188,7 @@ screens are present in this repository.
 No Flutter source or build metadata is present in this checkout, so mobile screen
 integration and APK builds cannot be confirmed from this repository. The routes in
 the tables above describe backend capabilities only.
+
+
+## Social follow requests update
+Apply `012_worker_follow_requests.sql` after `011_socialism_module.sql`. Worker directory uses `GET /socialism/workers?search=...`; incoming requests use `GET /socialism/workers/me/requests`; send via `POST /socialism/workers/{worker_id}/request`; accept/decline via `/socialism/workers/requests/{request_id}/accept` or `/decline`. Accepting creates follows in both directions and unlocks worker chat. Employer follow remains one-way and employers have no chat/request endpoints.

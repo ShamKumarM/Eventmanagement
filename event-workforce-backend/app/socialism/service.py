@@ -7,8 +7,12 @@ def worker_cards(ids: list[str]) -> dict[str, dict]:
         return {}
     rows = (admin_db.table("profiles").select("id, full_name, avatar_url")
             .in_("id", ids).eq("role", "worker").eq("role_selected", True).execute()).data or []
+    counts = (admin_db.table("worker_follower_counts")
+              .select("worker_id, follower_count").in_("worker_id", ids).execute()).data or []
+    count_map = {r["worker_id"]: r["follower_count"] for r in counts}
     return {r["id"]: {"id": r["id"], "full_name": r.get("full_name"),
-                      "avatar_url": r.get("avatar_url")} for r in rows}
+                      "avatar_url": r.get("avatar_url"),
+                      "follower_count": count_map.get(r["id"], 0)} for r in rows}
 
 
 def employer_cards(ids: list[str], viewer_worker_id: str | None = None) -> list[dict]:

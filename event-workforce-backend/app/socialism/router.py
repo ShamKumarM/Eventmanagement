@@ -82,23 +82,110 @@ def find_workers(search: str | None = Query(None, max_length=80),
     for item in items:
         item["is_following"] = item["id"] in followed
         item["can_chat"] = _mutual_follow(me, item["id"])
+    pending_out = {r["recipient_id"] for r in (
+        admin_db.table("worker_follow_requests").select("recipient_id")
+        .eq("requester_id", me).eq("status", "pending")
+        .in_("recipient_id", [x["id"] for x in items]).execute()).data or []} if items else set()
+    pending_in = {r["requester_id"] for r in (
+        admin_db.table("worker_follow_requests").select("requester_id")
+        .eq("recipient_id", me).eq("status", "pending")
+        .in_("requester_id", [x["id"] for x in items]).execute()).data or []} if items else set()
+    for item in items:
+        item["request_sent"] = item["id"] in pending_out
+        item["request_received"] = item["id"] in pending_in
+    counts = (admin_db.table("worker_follower_counts")
+              .select("worker_id, follower_count")
+              .in_("worker_id", [x["id"] for x in items]).execute()).data or [] if items else []
+    count_map = {r["worker_id"]: r["follower_count"] for r in counts}
+    for item in items:
+        item["follower_count"] = count_map.get(item["id"], 0)
     return {"items": items, "total": result.count or 0, "limit": limit, "offset": offset}
 
 
-@router.post("/workers/{worker_id}/follow", status_code=status.HTTP_201_CREATED)
-def follow_worker(worker_id: UUID, ctx=Depends(get_current_worker)):
+@router.post("/workers/{worker_id}/request", status_code=status.HTTP_201_CREATED)
+def request_worker_follow(worker_id: UUID, ctx=Depends(get_current_worker)):
+    """Send a worker connection request; no follow is created until acceptance."""
     me, other = _uid(ctx), str(worker_id)
     if me == other:
-        raise HTTPException(status_code=422, detail="You cannot follow yourself.")
+        raise HTTPException(status_code=422, detail="You cannot request yourself.")
     _profile_card(other)
+    # If the other worker already requested us, accepting their request is the
+    # natural follow-back action and immediately enables mutual-follow chat.
+    incoming = (admin_db.table("worker_follow_requests").select("id")
+                .eq("requester_id", other).eq("recipient_id", me)
+                .eq("status", "pending").limit(1).execute()).data or []
+    if incoming:
+        request_id = incoming[0]["id"]
+        admin_db.table("worker_follow_requests").update({
+            "status": "accepted", "responded_at": datetime.now().astimezone().isoformat()
+        }).eq("id", request_id).execute()
+        for follower, followed in ((me, other), (other, me)):
+            admin_db.table("worker_follows").upsert(
+                {"follower_id": follower, "followed_id": followed},
+                on_conflict="follower_id,followed_id"
+            ).execute()
+        return {"message": "Request accepted. You now follow each other.", "status": "accepted", "can_chat": True}
     try:
-        admin_db.table("worker_follows").insert({"follower_id": me, "followed_id": other}).execute()
+        row = admin_db.table("worker_follow_requests").insert({
+            "requester_id": me, "recipient_id": other
+        }).execute().data[0]
     except APIError as exc:
         if getattr(exc, "code", None) == "23505":
-            raise HTTPException(status_code=409, detail="You already follow this worker.") from exc
-        raise HTTPException(status_code=503, detail="Could not follow this worker.") from exc
-    return {"message": "You are now following this worker.", "worker_id": other,
-            "is_following": True, "can_chat": _mutual_follow(me, other)}
+            raise HTTPException(status_code=409, detail="A request is already pending.") from exc
+        raise HTTPException(status_code=503, detail="Could not send the request.") from exc
+    return {"message": "Follow request sent.", "status": "pending", "request_id": row["id"]}
+
+
+@router.get("/workers/me/requests")
+def incoming_worker_requests(limit: int = Query(25, ge=1, le=100),
+                             offset: int = Query(0, ge=0), ctx=Depends(get_current_worker)):
+    me = _uid(ctx)
+    rows = (admin_db.table("worker_follow_requests")
+            .select("id, requester_id, created_at", count="exact")
+            .eq("recipient_id", me).eq("status", "pending")
+            .order("created_at", desc=True).range(offset, offset + limit - 1).execute())
+    items = []
+    cards = service.worker_cards([r["requester_id"] for r in (rows.data or [])])
+    for row in rows.data or []:
+        card = cards.get(row["requester_id"])
+        if card:
+            items.append({**card, "request_id": row["id"], "requested_at": row["created_at"]})
+    return {"items": items, "total": rows.count or 0, "limit": limit, "offset": offset}
+
+
+@router.post("/workers/requests/{request_id}/accept")
+def accept_worker_request(request_id: UUID, ctx=Depends(get_current_worker)):
+    me = _uid(ctx)
+    rows = (admin_db.table("worker_follow_requests")
+            .select("id, requester_id, recipient_id, status")
+            .eq("id", str(request_id)).eq("recipient_id", me)
+            .eq("status", "pending").limit(1).execute()).data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="This request is no longer available.")
+    other = rows[0]["requester_id"]
+    admin_db.table("worker_follow_requests").update({
+        "status": "accepted", "responded_at": datetime.now().astimezone().isoformat()
+    }).eq("id", str(request_id)).execute()
+    for follower, followed in ((other, me), (me, other)):
+        admin_db.table("worker_follows").upsert(
+            {"follower_id": follower, "followed_id": followed},
+            on_conflict="follower_id,followed_id"
+        ).execute()
+    return {"message": "Request accepted. You now follow each other.", "can_chat": True}
+
+
+@router.post("/workers/requests/{request_id}/decline")
+def decline_worker_request(request_id: UUID, ctx=Depends(get_current_worker)):
+    me = _uid(ctx)
+    rows = (admin_db.table("worker_follow_requests").select("id")
+            .eq("id", str(request_id)).eq("recipient_id", me)
+            .eq("status", "pending").limit(1).execute()).data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="This request is no longer available.")
+    admin_db.table("worker_follow_requests").update({
+        "status": "declined", "responded_at": datetime.now().astimezone().isoformat()
+    }).eq("id", str(request_id)).execute()
+    return {"message": "Request declined."}
 
 
 @router.delete("/workers/{worker_id}/follow")
