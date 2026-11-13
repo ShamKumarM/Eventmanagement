@@ -7,7 +7,9 @@ This module uses the existing hosted Supabase tables:
 - `skills`
 - `worker_profile_skills`
 
-No new database tables or migrations are required for the profile endpoints.
+The profile routes depend on migrations `003` and `004` for location lookups and
+worker preferences, and `005` plus `006` for profile photos. Apply the required
+files to the Supabase project used by the API before using those features.
 
 ## Endpoints
 
@@ -17,6 +19,7 @@ All endpoints except `/health` require `Authorization: Bearer <access_token>`.
 |---|---|---|
 | GET | `/profile/me` | Any authenticated user |
 | PATCH | `/profile/me` | Any authenticated user; only `full_name`, `phone` |
+| POST | `/profile/avatar` | Any authenticated user; normalized public JPEG avatar upload |
 | GET | `/profile/completion` | Selected worker |
 | GET | `/profile/skills` | Any authenticated user |
 | GET | `/profile/worker` | Selected worker |
@@ -64,14 +67,16 @@ Body (raw JSON):
 ```json
 {
   "bio": "Experienced event staff member",
+  "preferred_state": "Tamil Nadu",
+  "preferred_district": "Coimbatore",
   "preferred_area": "Gandhipuram",
   "preferred_radius_km": 20,
   "is_available": true,
-  "experience_level": "1-2 years"
+  "experience_level": "1_to_3_years"
 }
 ```
 
-`experience_level` is free text in the current database; use values such as `Beginner`, `Less than 1 year`, `1-2 years`, `3-5 years`, or `5+ years` consistently across the app.
+`experience_level` must use one of the database values: `fresher`, `less_than_1_year`, `1_to_3_years`, `3_to_5_years`, or `5_plus_years`. The app may display friendlier labels while sending these values.
 
 ### 4. List available skills
 `GET {{base_url}}/profile/skills`
@@ -85,7 +90,7 @@ Body (raw JSON):
 }
 ```
 
-This replaces the worker's selected skills with the supplied list. At least one skill is required by this endpoint.
+This replaces the worker's selected skills with the supplied list. An empty list is allowed to remove all selected skills; workers still need a skill to meet the job application completion requirement.
 
 ### 6. Check completion
 `GET {{base_url}}/profile/completion`
