@@ -52,6 +52,5 @@ websockets==15.0.1
 yarl==1.25.1
 
 Pillow>=10.4,<13
-Pillow>=10.4,<13
 pillow-heif>=0.18,<2
 pillow-avif-plugin>=1.4,<2
