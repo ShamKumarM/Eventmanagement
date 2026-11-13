@@ -1,0 +1,1 @@
+"""In-app notifications (created by database triggers; read through this API)."""
