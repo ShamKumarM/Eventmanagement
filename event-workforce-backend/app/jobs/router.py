@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from math import asin, cos, radians, sin, sqrt
 from typing import Literal, Optional
@@ -48,13 +49,18 @@ def haversine_km(lat1, lng1, lat2, lng2) -> float:
 
 
 def selected_counts(job_ids: list[str]) -> dict[str, int]:
-    """Number of selected workers per job.
-
-    TODO: wire to the applications table once it exists, e.g.
-      db.table("applications").select("job_id").in_("job_id", job_ids)
-        .eq("status", "selected").execute()
-    """
-    return {}
+    """Number of selected workers per job, from the application records."""
+    unique_ids = list(dict.fromkeys(job_ids))
+    if not unique_ids:
+        return {}
+    rows = (
+        db.table("applications")
+        .select("job_id")
+        .in_("job_id", unique_ids)
+        .eq("status", "selected")
+        .execute()
+    ).data or []
+    return dict(Counter(str(row["job_id"]) for row in rows if row.get("job_id")))
 
 
 def with_positions(rows: list[dict]) -> list[dict]:

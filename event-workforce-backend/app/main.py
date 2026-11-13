@@ -9,11 +9,12 @@ from app.applications.router import router as applications_router
 from app.employer_verification.router import router as employer_verification_router
 from app.admin.router import router as admin_router
 from app.recommendations.router import router as recommendations_router
+from app.socialism.router import router as socialism_router
 
 app = FastAPI(
     title="Coimbatore Event Workforce Platform API",
     description="Backend API for workers, employers, and event management.",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 app.add_exception_handler(
@@ -34,3 +35,4 @@ app.include_router(applications_router)
 app.include_router(employer_verification_router)
 app.include_router(admin_router)
 app.include_router(recommendations_router)
+app.include_router(socialism_router)

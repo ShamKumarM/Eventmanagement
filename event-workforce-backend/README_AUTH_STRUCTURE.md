@@ -34,5 +34,4 @@ The existing authentication endpoint paths and request schemas are preserved.
 3. Start the API with `uvicorn app.main:app --reload`.
 4. Open `http://127.0.0.1:8000/docs` and test the existing routes.
 
-This change is a structural refactor only. Employer-role enforcement in the Jobs
-module remains a separate task.
+Jobs routes enforce the selected employer role through their shared dependency.
