@@ -9,8 +9,6 @@ from app.applications.router import router as applications_router
 from app.employer_verification.router import router as employer_verification_router
 from app.admin.router import router as admin_router
 from app.recommendations.router import router as recommendations_router
-from app.social.router import router as social_router
-from app.employer_follow.router import router as employer_follow_router
 
 app = FastAPI(
     title="Coimbatore Event Workforce Platform API",
@@ -36,5 +34,3 @@ app.include_router(applications_router)
 app.include_router(employer_verification_router)
 app.include_router(admin_router)
 app.include_router(recommendations_router)
-app.include_router(social_router)
-app.include_router(employer_follow_router)
