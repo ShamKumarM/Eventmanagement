@@ -42,6 +42,28 @@ def _mutual_follow(user_a: str, user_b: str) -> bool:
     return _is_following(user_a, user_b) and _is_following(user_b, user_a)
 
 
+
+
+def _mutual_follow_map(user_id: str, other_ids: list[str]) -> set[str]:
+    """Return the IDs that mutually follow user_id using two batched queries."""
+    ids = sorted({str(value) for value in other_ids if str(value) != user_id})
+    if not ids:
+        return set()
+    outgoing = {
+        row["followed_id"] for row in (
+            admin_db.table("worker_follows").select("followed_id")
+            .eq("follower_id", user_id).in_("followed_id", ids).execute()
+        ).data or []
+    }
+    incoming = {
+        row["follower_id"] for row in (
+            admin_db.table("worker_follows").select("follower_id")
+            .eq("followed_id", user_id).in_("follower_id", ids).execute()
+        ).data or []
+    }
+    return outgoing & incoming
+
+
 def _require_mutual_follow(user_id: str, other_id: str) -> None:
     if not _mutual_follow(user_id, other_id):
         raise HTTPException(status_code=403, detail="You can chat after you both follow each other.")
@@ -76,20 +98,28 @@ def find_workers(search: str | None = Query(None, max_length=80),
         query = query.ilike("full_name", f"%{search.strip()}%")
     result = query.order("full_name").range(offset, offset + limit - 1).execute()
     items = result.data or []
-    followed = {r["followed_id"] for r in (
-        admin_db.table("worker_follows").select("followed_id")
-        .eq("follower_id", me).in_("followed_id", [x["id"] for x in items]).execute()).data or []} if items else set()
+    item_ids = [x["id"] for x in items]
+    relation_rows = (
+        admin_db.table("worker_follows")
+        .select("follower_id, followed_id")
+        .or_(f"follower_id.eq.{me},followed_id.eq.{me}")
+        .execute()
+    ).data or [] if items else []
+    followed = {r["followed_id"] for r in relation_rows if r["follower_id"] == me and r["followed_id"] in item_ids}
+    followers = {r["follower_id"] for r in relation_rows if r["followed_id"] == me and r["follower_id"] in item_ids}
+    mutual = followed & followers
     for item in items:
         item["is_following"] = item["id"] in followed
-        item["can_chat"] = _mutual_follow(me, item["id"])
-    pending_out = {r["recipient_id"] for r in (
-        admin_db.table("worker_follow_requests").select("recipient_id")
-        .eq("requester_id", me).eq("status", "pending")
-        .in_("recipient_id", [x["id"] for x in items]).execute()).data or []} if items else set()
-    pending_in = {r["requester_id"] for r in (
-        admin_db.table("worker_follow_requests").select("requester_id")
-        .eq("recipient_id", me).eq("status", "pending")
-        .in_("requester_id", [x["id"] for x in items]).execute()).data or []} if items else set()
+        item["can_chat"] = item["id"] in mutual
+    request_rows = (
+        admin_db.table("worker_follow_requests")
+        .select("requester_id, recipient_id")
+        .eq("status", "pending")
+        .or_(f"requester_id.eq.{me},recipient_id.eq.{me}")
+        .execute()
+    ).data or [] if items else []
+    pending_out = {r["recipient_id"] for r in request_rows if r["requester_id"] == me and r["recipient_id"] in item_ids}
+    pending_in = {r["requester_id"] for r in request_rows if r["recipient_id"] == me and r["requester_id"] in item_ids}
     for item in items:
         item["request_sent"] = item["id"] in pending_out
         item["request_received"] = item["id"] in pending_in
@@ -208,8 +238,9 @@ def my_worker_following(limit: int = Query(25, ge=1, le=100),
               .range(offset, offset + limit - 1).execute())
     rows = result.data or []
     cards = service.worker_cards([r["followed_id"] for r in rows])
+    mutual = _mutual_follow_map(me, [r["followed_id"] for r in rows])
     items = [{**cards[r["followed_id"]], "followed_at": r["created_at"],
-              "can_chat": _mutual_follow(me, r["followed_id"])}
+              "can_chat": r["followed_id"] in mutual}
              for r in rows if r["followed_id"] in cards]
     return {"items": items, "total": result.count or 0, "limit": limit, "offset": offset}
 
@@ -223,8 +254,15 @@ def my_worker_followers(limit: int = Query(25, ge=1, le=100),
               .range(offset, offset + limit - 1).execute())
     rows = result.data or []
     cards = service.worker_cards([r["follower_id"] for r in rows])
+    following_back = {
+        r["followed_id"] for r in (
+            admin_db.table("worker_follows").select("followed_id")
+            .eq("follower_id", me)
+            .in_("followed_id", [row["follower_id"] for row in rows]).execute()
+        ).data or []
+    } if rows else set()
     items = [{**cards[r["follower_id"]], "followed_at": r["created_at"],
-              "is_following_back": _is_following(me, r["follower_id"])}
+              "is_following_back": r["follower_id"] in following_back}
              for r in rows if r["follower_id"] in cards]
     return {"items": items, "total": result.count or 0, "limit": limit, "offset": offset}
 
@@ -347,10 +385,18 @@ def list_chats(limit: int = Query(25, ge=1, le=100),
     cards = service.worker_cards(ids)
     for chat, other in zip(chats, ids):
         chat["worker"] = cards.get(other)
-        latest = (admin_db.table("worker_chat_messages")
-                  .select("id, sender_id, message_type, body, shared_job_snapshot, created_at")
-                  .eq("chat_id", chat["id"]).order("created_at", desc=True).limit(1).execute()).data or []
-        chat["last_message"] = latest[0] if latest else None
+    chat_ids = [chat["id"] for chat in chats]
+    latest_by_chat = {}
+    if chat_ids:
+        message_rows = (
+            admin_db.table("worker_chat_latest_messages")
+            .select("id, chat_id, sender_id, message_type, body, shared_job_snapshot, created_at")
+            .in_("chat_id", chat_ids)
+            .execute()
+        ).data or []
+        latest_by_chat = {message["chat_id"]: message for message in message_rows}
+    for chat in chats:
+        chat["last_message"] = latest_by_chat.get(chat["id"])
     return {"items": chats, "limit": limit, "offset": offset}
 
 
@@ -392,3 +438,11 @@ def send_chat_message(worker_id: UUID, payload: ChatMessageCreate, ctx=Depends(g
     except APIError as exc:
         raise HTTPException(status_code=503, detail="Could not send the chat message.") from exc
     return result.data[0]
+
+
+# Backward-compatible aliases for older Postman requests that omitted /socialism.
+# Canonical documented endpoints remain under /socialism.
+legacy_router = APIRouter(tags=["Legacy compatibility"])
+legacy_router.add_api_route("/employers/most-followed", most_followed_employers, methods=["GET"], include_in_schema=False)
+legacy_router.add_api_route("/employers/me/following", my_employer_following, methods=["GET"], include_in_schema=False)
+legacy_router.add_api_route("/chats", list_chats, methods=["GET"], include_in_schema=False)

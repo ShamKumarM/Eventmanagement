@@ -3,7 +3,7 @@ import logging
 
 from fastapi import Header, HTTPException, status
 
-from app.services.supabase_client import create_supabase_client
+from app.services.supabase_client import supabase
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def get_current_user(authorization: str | None = Header(default=None)):
         raise HTTPException(status_code=401, detail="Missing access token.")
 
     try:
-        response = create_supabase_client().auth.get_user(token)
+        response = supabase.auth.get_user(token)
         if not response.user:
             raise HTTPException(status_code=401, detail="Invalid or expired session.")
         return response.user
