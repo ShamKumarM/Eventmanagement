@@ -41,16 +41,6 @@ def _get_job(job_id) -> dict:
     res = admin_db.table("jobs").select(JOB_COLUMNS).eq("id", str(job_id)).limit(1).execute()
     if not res.data:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found.")
-    if new == ApplicationStatus.selected and current != ApplicationStatus.selected:
-        create_notification(
-            str(app["worker_id"]),
-            "application_accepted",
-            "Your application was accepted!",
-            f"The employer selected you for {job.get('title') or 'an event job'}. "
-            "Open My Applications to view the employer's contact details.",
-            {"application_id": str(application_id), "job_id": str(app["job_id"]),
-             "job_title": job.get("title")},
-        )
     return res.data[0]
 
 
