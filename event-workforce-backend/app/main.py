@@ -10,6 +10,7 @@ from app.employer_verification.router import router as employer_verification_rou
 from app.admin.router import router as admin_router
 from app.recommendations.router import router as recommendations_router
 from app.socialism.router import router as socialism_router, legacy_router as socialism_legacy_router
+from app.notifications.router import router as notifications_router
 
 app = FastAPI(
     title="Coimbatore Event Workforce Platform API",
@@ -37,3 +38,4 @@ app.include_router(admin_router)
 app.include_router(recommendations_router)
 app.include_router(socialism_router)
 app.include_router(socialism_legacy_router)
+app.include_router(notifications_router)

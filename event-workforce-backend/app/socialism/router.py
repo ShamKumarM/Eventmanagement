@@ -14,6 +14,7 @@ from app.applications.deps import get_current_worker, get_current_employer
 from app.auth.db import admin_db
 from app.auth.deps import get_current_user
 from app.jobs.schemas import JobStatus, today_ist
+from app.notifications.service import create_notification
 from . import service
 from .deps import get_current_member
 from .schemas import ChatMessageCreate, WorkerFollowCreate
@@ -154,6 +155,11 @@ def request_worker_follow(worker_id: UUID, ctx=Depends(get_current_worker)):
                 {"follower_id": follower, "followed_id": followed},
                 on_conflict="follower_id,followed_id"
             ).execute()
+        create_notification(
+            other, "connection_request_accepted", "Connection request accepted",
+            "Your worker connection request was accepted. You can now chat.",
+            {"worker_id": me},
+        )
         return {"message": "Request accepted. You now follow each other.", "status": "accepted", "can_chat": True}
     try:
         row = admin_db.table("worker_follow_requests").insert({
@@ -201,6 +207,11 @@ def accept_worker_request(request_id: UUID, ctx=Depends(get_current_worker)):
             {"follower_id": follower, "followed_id": followed},
             on_conflict="follower_id,followed_id"
         ).execute()
+    create_notification(
+        other, "connection_request_accepted", "Connection request accepted",
+        "Your worker connection request was accepted. You can now chat.",
+        {"worker_id": me},
+    )
     return {"message": "Request accepted. You now follow each other.", "can_chat": True}
 
 
