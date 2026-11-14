@@ -15,6 +15,7 @@ from postgrest.exceptions import APIError
 
 from app.auth.db import admin_db
 from app.jobs.schemas import JobStatus, today_ist
+from app.notifications.service import create_notification
 
 from .deps import assert_worker_eligible, get_current_employer, get_current_worker
 from .schemas import (
@@ -40,6 +41,16 @@ def _get_job(job_id) -> dict:
     res = admin_db.table("jobs").select(JOB_COLUMNS).eq("id", str(job_id)).limit(1).execute()
     if not res.data:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found.")
+    if new == ApplicationStatus.selected and current != ApplicationStatus.selected:
+        create_notification(
+            str(app["worker_id"]),
+            "application_accepted",
+            "Your application was accepted!",
+            f"The employer selected you for {job.get('title') or 'an event job'}. "
+            "Open My Applications to view the employer's contact details.",
+            {"application_id": str(application_id), "job_id": str(app["job_id"]),
+             "job_title": job.get("title")},
+        )
     return res.data[0]
 
 
@@ -105,15 +116,53 @@ def my_applications(
     if rows:
         job_rows = (
             admin_db.table("jobs").select(
-                "id, title, category_id, job_categories(name), description, job_date, "
+                "id, employer_id, title, category_id, job_categories(name), description, job_date, "
                 "reporting_time, start_time, end_time, area, district, city, state, "
                 "venue_name, address, salary_per_worker, workers_required, "
                 "food_provided, transport_provided, dress_code, status"
             ).in_("id", list({r["job_id"] for r in rows})).execute().data
         )
         jobs = {j["id"]: j for j in job_rows}
+    # Employer contact details are private until the employer selects this worker.
+    selected_employer_ids = list({
+        jobs[r["job_id"]]["employer_id"]
+        for r in rows
+        if r.get("status") == ApplicationStatus.selected.value
+        and jobs.get(r["job_id"], {}).get("employer_id")
+    })
+    employer_contacts = {}
+    if selected_employer_ids:
+        profiles = (admin_db.table("profiles").select("id, phone")
+                    .in_("id", selected_employer_ids).execute()).data or []
+        employer_profiles = (admin_db.table("employer_profiles")
+                    .select("user_id, organisation_name, contact_person")
+                    .in_("user_id", selected_employer_ids).execute()).data or []
+        shared_by_id = {p["id"]: p for p in profiles}
+        employer_by_id = {p["user_id"]: p for p in employer_profiles}
+        for employer_id in selected_employer_ids:
+            email = None
+            try:
+                auth_result = admin_db.auth.admin.get_user_by_id(employer_id)
+                auth_user = getattr(auth_result, "user", None)
+                email = getattr(auth_user, "email", None) if auth_user else None
+            except Exception:
+                email = None
+            shared = shared_by_id.get(employer_id, {})
+            employer = employer_by_id.get(employer_id, {})
+            employer_contacts[employer_id] = {
+                "mobile": shared.get("phone"),
+                "email": email,
+                "organisation_name": employer.get("organisation_name"),
+                "contact_person": employer.get("contact_person"),
+            }
+
     for r in rows:
         r["job"] = jobs.get(r["job_id"])
+        r["employer_contact"] = (
+            employer_contacts.get(r["job"].get("employer_id"))
+            if r.get("status") == ApplicationStatus.selected.value and r["job"]
+            else None
+        )
     return {"total": res.count, "page": page, "items": rows}
 
 
@@ -231,4 +280,14 @@ def update_application_status(
         admin_db.table("applications").update({"status": new.value})
         .eq("id", str(application_id)).execute()
     )
+    if new == ApplicationStatus.selected and current != ApplicationStatus.selected:
+        create_notification(
+            str(app["worker_id"]),
+            "application_accepted",
+            "Your application was accepted!",
+            f"The employer selected you for {job.get('title') or 'an event job'}. "
+            "Open My Applications to view the employer's contact details.",
+            {"application_id": str(application_id), "job_id": str(app["job_id"]),
+             "job_title": job.get("title")},
+        )
     return res.data[0]
