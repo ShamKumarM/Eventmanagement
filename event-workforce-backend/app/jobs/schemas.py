@@ -49,6 +49,11 @@ class JobBase(BaseModel):
     end_time: Optional[time] = None
 
     workers_required: int = Field(ge=1, le=1000)
+    # Null values mean a legacy/open-to-all-genders job. New Flutter postings
+    # always send all three counts and the backend verifies their sum.
+    male_required: Optional[int] = Field(default=None, ge=0, le=1000)
+    female_required: Optional[int] = Field(default=None, ge=0, le=1000)
+    trans_required: Optional[int] = Field(default=None, ge=0, le=1000)
     salary_per_worker: float = Field(gt=0, le=100000)
     payment_type: PaymentType
     payment_days: Optional[int] = Field(default=None, ge=1, le=60)
@@ -101,6 +106,14 @@ class JobCreate(JobBase):
             raise ValueError("Reporting time must be the same as or earlier than the start time.")
         if self.payment_type == PaymentType.custom_days and not self.payment_days:
             raise ValueError("Enter the number of days when you choose custom payment.")
+        gender_counts = (self.male_required, self.female_required, self.trans_required)
+        if any(value is not None for value in gender_counts):
+            if any(value is None for value in gender_counts):
+                raise ValueError("Provide all three gender position counts.")
+            if sum(gender_counts) != self.workers_required:
+                raise ValueError("Total workers must equal the sum of male, female, and transgender positions.")
+            if sum(gender_counts) < 1:
+                raise ValueError("Allocate at least one position to a gender.")
         return self
 
 
@@ -116,6 +129,9 @@ class JobUpdate(BaseModel):
     start_time: Optional[time] = None
     end_time: Optional[time] = None
     workers_required: Optional[int] = None
+    male_required: Optional[int] = Field(default=None, ge=0, le=1000)
+    female_required: Optional[int] = Field(default=None, ge=0, le=1000)
+    trans_required: Optional[int] = Field(default=None, ge=0, le=1000)
     salary_per_worker: Optional[float] = None
     payment_type: Optional[PaymentType] = None
     payment_days: Optional[int] = None
