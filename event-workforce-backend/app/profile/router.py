@@ -182,7 +182,7 @@ class WorkerProfileUpdate(BaseModel):
 class SkillSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # Empty list is valid: it lets a worker remove every previously selected skill.
-    skill_ids: list[int] = Field(default_factory=list, max_length=13)
+    skill_ids: list[int] = Field(default_factory=list, max_length=80)
 
     @field_validator("skill_ids")
     @classmethod
@@ -394,7 +394,8 @@ def list_skills(user=Depends(get_current_user)):
     """List active skills from the existing skills table."""
     _profile_or_404(str(user.id))
     try:
-        result = admin_db.table("skills").select("id, name").order("id").execute()
+        result = (admin_db.table("skills").select("id, name")
+                  .eq("is_active", True).order("id").execute())
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Could not load skills.") from exc
     return result.data or []
@@ -476,7 +477,9 @@ def replace_worker_skills(payload: SkillSelection, user=Depends(get_current_user
     _require_role(profile, "worker")
 
     if payload.skill_ids:
-        valid_result = admin_db.table("skills").select("id").in_("id", payload.skill_ids).execute()
+        valid_result = (admin_db.table("skills").select("id")
+                        .in_("id", payload.skill_ids)
+                        .eq("is_active", True).execute())
         valid_ids = {int(row["id"]) for row in (valid_result.data or [])}
     else:
         valid_ids = set()
