@@ -16,6 +16,7 @@ from app.jobs.schemas import JobStatus, today_ist
 from app.jobs.reactions import attach_reaction_counts, attach_employer_names
 
 from .geo import RADIUS_KM, rank_nearby, resolve_area
+from .matching import build_top_picks
 
 router = APIRouter(tags=["recommendations"])
 
@@ -141,6 +142,7 @@ def worker_home_recommendations(
             "start_time, end_time, workers_required, salary_per_worker, "
             "payment_type, venue_name, address, area, city, district, state, "
             "food_provided, transport_provided, dress_code, status, "
+            "male_required, female_required, trans_required, "
             "job_categories(name)"
         )
         .eq("status", JobStatus.open.value)
@@ -269,8 +271,55 @@ def worker_home_recommendations(
             ) or int(job.get(quota_column) or 0) > 0
         ]
 
+    # Strict Top Picks: exact district, exact area, exact job-title/skill,
+    # and remaining capacity for the worker's registered gender.
+    selected_total_by_job: dict[str, int] = {}
+    selected_gender_by_job: dict[str, dict[str, int]] = {}
+    candidate_ids = [str(job["id"]) for job in jobs if job.get("id")]
+    if candidate_ids:
+        selected_applications = (
+            admin_db.table("applications")
+            .select("job_id, worker_id")
+            .in_("job_id", candidate_ids)
+            .eq("status", "selected")
+            .execute()
+        ).data or []
+        selected_worker_ids = sorted({str(row["worker_id"]) for row in selected_applications if row.get("worker_id")})
+        gender_by_worker: dict[str, str] = {}
+        if selected_worker_ids:
+            selected_profiles = (
+                admin_db.table("profiles")
+                .select("id, gender")
+                .in_("id", selected_worker_ids)
+                .execute()
+            ).data or []
+            gender_by_worker = {
+                str(row["id"]): str(row.get("gender") or "").lower()
+                for row in selected_profiles
+            }
+        for row in selected_applications:
+            job_id = str(row.get("job_id") or "")
+            worker_id = str(row.get("worker_id") or "")
+            if not job_id:
+                continue
+            selected_total_by_job[job_id] = selected_total_by_job.get(job_id, 0) + 1
+            selected_gender = gender_by_worker.get(worker_id)
+            if selected_gender in {"male", "female", "trans"}:
+                by_gender = selected_gender_by_job.setdefault(job_id, {})
+                by_gender[selected_gender] = by_gender.get(selected_gender, 0) + 1
+
+    top_picks = build_top_picks(
+        jobs=jobs,
+        skill_names=[str(item.get("name") or "") for item in skills],
+        preferred_district=preferred_district,
+        preferred_area=preferred_area,
+        gender=worker_gender,
+        selected_total_by_job=selected_total_by_job,
+        selected_gender_by_job=selected_gender_by_job,
+    )
+
     unique_jobs = {}
-    for section in [skill_sections, [{"items": location_jobs}], [{"items": experience_jobs}], [{"items": gender_jobs}], [{"items": jobs}]]:
+    for section in [skill_sections, [{"items": top_picks}], [{"items": location_jobs}], [{"items": experience_jobs}], [{"items": gender_jobs}], [{"items": jobs}]]:
         for group in section:
             for item in group.get("items", []):
                 unique_jobs[str(item["id"])] = item
@@ -286,7 +335,17 @@ def worker_home_recommendations(
         "experience_label": experience_labels.get(experience, experience.replace("_", " ").title()),
         "gender": worker_gender,
         "skills": skills,
+        "top_picks": {
+            "count": len(top_picks),
+            "matching": {
+                "district": preferred_district or None,
+                "area": preferred_area or None,
+                "gender": worker_gender,
+                "skill_titles": [str(item.get("name") or "") for item in skills],
+            },
+        },
         "sections": {
+            "top_picks": top_picks,
             "skills": skill_sections,
             "location": location_jobs[:20],
             "experience": experience_jobs[:20],
