@@ -140,3 +140,18 @@ Use Postman, not Swagger, for testing.
 The updated worker profile stores `preferred_state`, `preferred_district`, and `preferred_area`. Run `004_worker_preferred_location.sql` after the job location migration `003_job_location_dropdowns.sql` before deploying the updated API. The mobile app loads the same authenticated location endpoints used by job creation and submits the three selected names together.
 
 The profile API validates that the selected district belongs to the selected state and the selected area belongs to the selected district. `PUT /profile/skills` also accepts an empty `skill_ids` list so a worker can remove all previously selected skills.
+
+
+## Expanded worker skills catalogue (migration 016)
+
+Run `016_expand_worker_skills.sql` in the Supabase SQL Editor before deploying
+this version of the API. It inserts/reactivates the 80 Gigscart event-workforce
+skills in the existing `skills` master table. It is safe to run repeatedly and
+does not delete or modify any rows in `worker_profile_skills`.
+
+`GET /profile/skills` returns active skills only. `PUT /profile/skills`
+accepts up to 80 unique active skill IDs and rejects inactive or unknown IDs.
+The Flutter profile editor groups the returned skills into searchable
+categories while saving through the existing `PUT /profile/skills` endpoint.
+
+No new table, column, or foreign key is required.
