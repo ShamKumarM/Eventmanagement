@@ -35,7 +35,7 @@ WORKER_REQUIRED_FIELDS = {
 def _profile_or_404(user_id: str) -> dict[str, Any]:
     result = (
         admin_db.table("profiles")
-        .select("id, full_name, phone, avatar_url, role, role_selected, created_at, updated_at")
+        .select("id, full_name, phone, gender, avatar_url, role, role_selected, created_at, updated_at")
         .eq("id", user_id)
         .limit(1)
         .execute()
@@ -112,6 +112,17 @@ class SharedProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     full_name: str | None = Field(default=None, min_length=2, max_length=100)
     phone: str | None = Field(default=None, min_length=7, max_length=20)
+    gender: str | None = None
+
+    @field_validator("gender")
+    @classmethod
+    def validate_gender(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip().lower()
+        if cleaned not in {"male", "female", "trans"}:
+            raise ValueError("Choose Male, Female, or Transgender.")
+        return cleaned
 
     @field_validator("full_name")
     @classmethod

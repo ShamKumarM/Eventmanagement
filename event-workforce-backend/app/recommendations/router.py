@@ -100,7 +100,7 @@ def worker_home_recommendations(
     user_id = str(user.id)
     profile_rows = (
         admin_db.table("profiles")
-        .select("role, role_selected")
+        .select("role, role_selected, gender")
         .eq("id", user_id)
         .limit(1)
         .execute()
@@ -255,8 +255,22 @@ def worker_home_recommendations(
     if not experience_jobs:
         experience_jobs = jobs[:]
 
+    worker_gender = profile_rows[0].get("gender")
+    gender_jobs = []
+    if worker_gender in {"male", "female", "trans"}:
+        quota_column = {"male": "male_required", "female": "female_required", "trans": "trans_required"}[worker_gender]
+        gender_jobs = [
+            job for job in jobs
+            if (
+                # Legacy jobs with no gender allocation remain open to everyone.
+                job.get("male_required") is None
+                and job.get("female_required") is None
+                and job.get("trans_required") is None
+            ) or int(job.get(quota_column) or 0) > 0
+        ]
+
     unique_jobs = {}
-    for section in [skill_sections, [{"items": location_jobs}], [{"items": experience_jobs}], [{"items": jobs}]]:
+    for section in [skill_sections, [{"items": location_jobs}], [{"items": experience_jobs}], [{"items": gender_jobs}], [{"items": jobs}]]:
         for group in section:
             for item in group.get("items", []):
                 unique_jobs[str(item["id"])] = item
@@ -270,11 +284,13 @@ def worker_home_recommendations(
                     "skill": requested_skill or None, "search": search_term or None, "sort_by": sort_by},
         "experience_level": experience,
         "experience_label": experience_labels.get(experience, experience.replace("_", " ").title()),
+        "gender": worker_gender,
         "skills": skills,
         "sections": {
             "skills": skill_sections,
             "location": location_jobs[:20],
             "experience": experience_jobs[:20],
+            "gender": gender_jobs[:20],
             "all_jobs": jobs[:30],
         },
     }

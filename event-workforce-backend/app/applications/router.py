@@ -32,7 +32,10 @@ router = APIRouter(tags=["applications"])
 LOCKED_JOB_STATUSES = {
     JobStatus.cancelled.value, JobStatus.completed.value, JobStatus.expired.value,
 }
-JOB_COLUMNS = "id, employer_id, title, job_date, start_time, area, city, salary_per_worker, workers_required, status"
+JOB_COLUMNS = (
+    "id, employer_id, title, job_date, start_time, area, city, salary_per_worker, "
+    "workers_required, male_required, female_required, trans_required, status"
+)
 
 
 # ---------- helpers ----------
@@ -68,6 +71,29 @@ def apply_to_job(payload: ApplicationCreate, ctx=Depends(get_current_worker)):
         raise HTTPException(status.HTTP_409_CONFLICT, f"This job is not open for applications (status: {job['status']}).")
     if job["job_date"] < today_ist().isoformat():
         raise HTTPException(status.HTTP_409_CONFLICT, "This job's date has already passed.")
+
+    # Gender-allocated postings only accept applicants for a remaining gender slot.
+    gender_counts = (job.get("male_required"), job.get("female_required"), job.get("trans_required"))
+    if any(value is not None for value in gender_counts):
+        worker_gender = profile.get("gender")
+        if worker_gender not in {"male", "female", "trans"}:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Set your gender in your profile before applying to this job.")
+        quota_column = {"male": "male_required", "female": "female_required", "trans": "trans_required"}[worker_gender]
+        quota = job.get(quota_column) or 0
+        selected_rows = (
+            admin_db.table("applications").select("worker_id")
+            .eq("job_id", str(payload.job_id)).eq("status", "selected").execute()
+        ).data or []
+        selected_ids = [row["worker_id"] for row in selected_rows]
+        selected_for_gender = 0
+        if selected_ids:
+            gender_rows = (
+                admin_db.table("profiles").select("id")
+                .eq("gender", worker_gender).in_("id", selected_ids).execute()
+            ).data or []
+            selected_for_gender = len(gender_rows)
+        if quota <= selected_for_gender:
+            raise HTTPException(status.HTTP_409_CONFLICT, f"No {worker_gender} positions remain for this job.")
 
     # Rule 5: agreed profile-completion rule.
     assert_worker_eligible(str(user.id), profile)
@@ -197,7 +223,7 @@ def applications_for_job(
         people = {
             p["id"]: p
             for p in admin_db.table("profiles")
-            .select("id, full_name, phone, avatar_url")
+            .select("id, full_name, phone, gender, avatar_url")
             .in_("id", ids).execute().data
         }
         wp = {
@@ -227,6 +253,7 @@ def applications_for_job(
             r["applicant"] = {
                 "full_name": p.get("full_name"),
                 "phone": p.get("phone"),
+                "gender": p.get("gender"),
                 "avatar_url": p.get("avatar_url"),
                 "bio": w.get("bio"),
                 "preferred_state": w.get("preferred_state"),
@@ -258,6 +285,33 @@ def update_application_status(
         raise HTTPException(status.HTTP_409_CONFLICT, f"Cannot change status from {current.value} to {new.value}.")
 
     if new == ApplicationStatus.selected:
+        # Enforce the allocated gender quota in addition to the overall job capacity.
+        gender_counts = (job.get("male_required"), job.get("female_required"), job.get("trans_required"))
+        if any(value is not None for value in gender_counts):
+            applicant_profile = (
+                admin_db.table("profiles").select("gender")
+                .eq("id", app["worker_id"]).limit(1).execute().data or []
+            )
+            applicant_gender = applicant_profile[0].get("gender") if applicant_profile else None
+            quota_column = {"male": "male_required", "female": "female_required", "trans": "trans_required"}.get(applicant_gender)
+            if quota_column is None:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Applicant must have a valid gender in their profile.")
+            quota = int(job.get(quota_column) or 0)
+            selected_rows = (
+                admin_db.table("applications").select("worker_id")
+                .eq("job_id", app["job_id"]).eq("status", ApplicationStatus.selected.value).execute()
+            ).data or []
+            selected_ids = [row["worker_id"] for row in selected_rows]
+            already_selected_gender = 0
+            if selected_ids:
+                gender_rows = (
+                    admin_db.table("profiles").select("id")
+                    .eq("gender", applicant_gender).in_("id", selected_ids).execute()
+                ).data or []
+                already_selected_gender = len(gender_rows)
+            if already_selected_gender >= quota:
+                raise HTTPException(status.HTTP_409_CONFLICT, f"The {applicant_gender} positions for this job are already filled.")
+
         # NOTE: check-then-update is not atomic; fine for MVP, use an RPC later if races appear.
         taken = (
             admin_db.table("applications").select("id", count="exact")

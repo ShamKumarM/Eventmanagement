@@ -260,6 +260,32 @@ def update_job(job_id: UUID, payload: JobUpdate, user=Depends(get_current_employ
         if patch["workers_required"] < selected:
             raise HTTPException(409, f"{selected} workers already selected")
 
+    final_gender_values = (
+        merged.get("male_required"), merged.get("female_required"), merged.get("trans_required")
+    )
+    if any(value is not None for value in final_gender_values):
+        selected_rows = (
+            db.table("applications").select("worker_id")
+            .eq("job_id", str(job_id)).eq("status", "selected").execute()
+        ).data or []
+        selected_ids = [row["worker_id"] for row in selected_rows]
+        if selected_ids:
+            selected_profiles = (
+                db.table("profiles").select("gender")
+                .in_("id", selected_ids).execute()
+            ).data or []
+            selected_gender_counts = Counter(row.get("gender") for row in selected_profiles)
+            for gender, field in (
+                ("male", "male_required"),
+                ("female", "female_required"),
+                ("trans", "trans_required"),
+            ):
+                if selected_gender_counts.get(gender, 0) > int(merged.get(field) or 0):
+                    raise HTTPException(
+                        409,
+                        f"Cannot reduce {field.replace('_', ' ')} below the number of workers already selected.",
+                    )
+
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()
     res = db.table("jobs").update(patch).eq("id", str(job_id)).execute()
     # TODO: if date/time/location changed, notify selected workers.

@@ -12,7 +12,7 @@ from app.auth.deps import get_current_user
 def _profile(user_id: str) -> dict:
     res = (
         admin_db.table("profiles")
-        .select("id, full_name, phone, role, role_selected")
+        .select("id, full_name, phone, gender, role, role_selected")
         .eq("id", user_id)
         .limit(1)
         .execute()
