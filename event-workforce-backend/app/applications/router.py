@@ -5,7 +5,7 @@ Endpoints
   GET   /applications/mine                 worker   my applications
   POST  /applications/{id}/withdraw        worker   withdraw my application
   GET   /jobs/{job_id}/applications        employer applicants for my job
-  PATCH /applications/{id}/status          employer shortlist / select / reject
+  PATCH /applications/{id}/status          employer accept / reject
 """
 from typing import Optional
 from uuid import UUID
@@ -15,6 +15,7 @@ from postgrest.exceptions import APIError
 
 from app.auth.db import admin_db
 from app.jobs.schemas import JobStatus, today_ist
+from app.jobs.expiry import job_is_expired
 from app.notifications.service import create_notification
 
 from .deps import assert_worker_eligible, get_current_employer, get_current_worker
@@ -33,7 +34,7 @@ LOCKED_JOB_STATUSES = {
     JobStatus.cancelled.value, JobStatus.completed.value, JobStatus.expired.value,
 }
 JOB_COLUMNS = (
-    "id, employer_id, title, job_date, start_time, area, city, salary_per_worker, "
+    "id, employer_id, title, job_date, reporting_time, start_time, end_time, area, city, salary_per_worker, "
     "workers_required, male_required, female_required, trans_required, status"
 )
 
@@ -69,8 +70,8 @@ def apply_to_job(payload: ApplicationCreate, ctx=Depends(get_current_worker)):
     # Rule 6: same rule the job feed uses: status open and date not past (IST).
     if job["status"] != JobStatus.open.value:
         raise HTTPException(status.HTTP_409_CONFLICT, f"This job is not open for applications (status: {job['status']}).")
-    if job["job_date"] < today_ist().isoformat():
-        raise HTTPException(status.HTTP_409_CONFLICT, "This job's date has already passed.")
+    if job_is_expired(job):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This job has expired and is no longer accepting applications.")
 
     # Gender-allocated postings only accept applicants for a remaining gender slot.
     gender_counts = (job.get("male_required"), job.get("female_required"), job.get("trans_required"))
@@ -119,13 +120,12 @@ def my_applications(
     ctx=Depends(get_current_worker),
 ):
     q = (
-        admin_db.table("applications").select("*", count="exact")
+        admin_db.table("applications").select("*")
         .eq("worker_id", str(ctx["user"].id))
     )
     if status_filter:
         q = q.eq("status", status_filter.value)
-    lo, hi = _paginate(page, page_size)
-    res = q.order("created_at", desc=True).range(lo, hi).execute()
+    res = q.order("created_at", desc=True).execute()
     rows = res.data or []
 
     jobs = {}
@@ -139,6 +139,15 @@ def my_applications(
             ).in_("id", list({r["job_id"] for r in rows})).execute().data
         )
         jobs = {j["id"]: j for j in job_rows}
+    # Hide applications for jobs whose scheduled shift has ended, even if the
+    # daily Supabase cleanup has not run yet.
+    rows = [
+        row for row in rows
+        if jobs.get(row["job_id"]) and not job_is_expired(jobs[row["job_id"]])
+    ]
+    total = len(rows)
+    start = (page - 1) * page_size
+    rows = rows[start:start + page_size]
     # Employer contact details are private until the employer selects this worker.
     selected_employer_ids = list({
         jobs[r["job_id"]]["employer_id"]
@@ -179,7 +188,7 @@ def my_applications(
             if r.get("status") == ApplicationStatus.selected.value and r["job"]
             else None
         )
-    return {"total": res.count, "page": page, "items": rows}
+    return {"total": total, "page": page, "items": rows}
 
 
 @router.post("/applications/{application_id}/withdraw")
@@ -277,11 +286,18 @@ def update_application_status(
     job = _get_job(app["job_id"])
     if job["employer_id"] != str(user.id):           # Rule 9: ownership check
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your job.")
-    if job["status"] in LOCKED_JOB_STATUSES:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"Job is {job['status']}; applications can no longer be changed.")
+    if job["status"] in LOCKED_JOB_STATUSES or job_is_expired(job):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This job has expired or closed; applications can no longer be changed.")
 
     current, new = ApplicationStatus(app["status"]), payload.status
-    if new not in EMPLOYER_TRANSITIONS.get(current, set()):
+    if current == ApplicationStatus.shortlisted:
+        # Legacy shortlisted records can still be accepted or rejected.
+        allowed = {ApplicationStatus.selected, ApplicationStatus.rejected}
+    elif current == ApplicationStatus.pending:
+        allowed = {ApplicationStatus.selected, ApplicationStatus.rejected}
+    else:
+        allowed = set()
+    if new not in allowed:
         raise HTTPException(status.HTTP_409_CONFLICT, f"Cannot change status from {current.value} to {new.value}.")
 
     if new == ApplicationStatus.selected:

@@ -13,6 +13,7 @@ from app.applications.deps import get_current_worker   # reuse the shared worker
 from app.auth.db import admin_db
 from app.auth.deps import get_current_user
 from app.jobs.schemas import JobStatus, today_ist
+from app.jobs.expiry import job_is_expired
 from app.jobs.reactions import attach_reaction_counts, attach_employer_names
 
 from .geo import RADIUS_KM, rank_nearby, resolve_area
@@ -161,7 +162,7 @@ def worker_home_recommendations(
         query = query.order("salary_per_worker", desc=True)
     else:
         query = query.order("job_date")
-    jobs = query.execute().data or []
+    jobs = [job for job in (query.execute().data or []) if not job_is_expired(job)]
 
     def searchable(job: dict) -> str:
         category = job.get("job_categories") or {}

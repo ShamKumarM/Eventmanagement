@@ -121,7 +121,7 @@ class SharedProfileUpdate(BaseModel):
             return value
         cleaned = value.strip().lower()
         if cleaned not in {"male", "female", "trans"}:
-            raise ValueError("Choose Male, Female, or Transgender.")
+            raise ValueError("Choose Male, Female, or Other gender.")
         return cleaned
 
     @field_validator("full_name")

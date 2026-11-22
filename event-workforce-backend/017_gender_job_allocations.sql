@@ -35,6 +35,6 @@ COMMENT ON COLUMN public.profiles.gender IS
   'User-provided gender identity: male, female, or trans.';
 COMMENT ON COLUMN public.jobs.male_required IS 'Number of male positions allocated to this job.';
 COMMENT ON COLUMN public.jobs.female_required IS 'Number of female positions allocated to this job.';
-COMMENT ON COLUMN public.jobs.trans_required IS 'Number of transgender positions allocated to this job.';
+COMMENT ON COLUMN public.jobs.trans_required IS 'Number of other-gender positions allocated to this job.';
 
 -- Existing jobs retain NULL allocations and remain open to all genders.

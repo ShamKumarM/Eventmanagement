@@ -45,7 +45,7 @@ class JobBase(BaseModel):
 
     job_date: date
     reporting_time: time
-    start_time: time
+    start_time: Optional[time] = None
     end_time: Optional[time] = None
 
     workers_required: int = Field(ge=1, le=1000)
@@ -102,7 +102,7 @@ class JobCreate(JobBase):
     @model_validator(mode="after")
     def cross_checks(self):
         # end_time <= start_time is allowed (event runs past midnight).
-        if self.reporting_time > self.start_time:
+        if self.start_time is not None and self.reporting_time > self.start_time:
             raise ValueError("Reporting time must be the same as or earlier than the start time.")
         if self.payment_type == PaymentType.custom_days and not self.payment_days:
             raise ValueError("Enter the number of days when you choose custom payment.")
@@ -111,7 +111,7 @@ class JobCreate(JobBase):
             if any(value is None for value in gender_counts):
                 raise ValueError("Provide all three gender position counts.")
             if sum(gender_counts) != self.workers_required:
-                raise ValueError("Total workers must equal the sum of male, female, and transgender positions.")
+                raise ValueError("Total workers must equal the sum of male, female, and other-gender positions.")
             if sum(gender_counts) < 1:
                 raise ValueError("Allocate at least one position to a gender.")
         return self
