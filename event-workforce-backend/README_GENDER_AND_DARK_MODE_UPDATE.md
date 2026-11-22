@@ -11,14 +11,14 @@ The migration adds `profiles.gender` and the three nullable job allocation colum
 The API validates allocations, exposes gender in profile responses, filters the home `sections.gender` feed, prevents workers applying to a gender with no allocated positions, and enforces the same gender quota when employers select applicants.
 
 ## Flutter
-The first role selection is followed by gender selection. Returning accounts with no gender are prompted once at the gate. Users can change gender in Edit Profile. Employers allocate male/female/transgender counts in Create Job; total positions are calculated from those counts.
+The first role selection is followed by gender selection. Returning accounts with no gender are prompted once at the gate. Users can change gender in Edit Profile. Employers allocate male/female/other-gender counts in Create Job; total positions are calculated from those counts.
 
 Dark mode is available under Profile > Appearance and is saved locally on the device.
 
 ## Example allocation
 - Male: 3
 - Female: 5
-- Transgender: 0
+- Other gender: 0
 - Total positions: 8
 
 The Flutter app sends all four values and the backend rejects a total that does not equal the sum of the gender allocations.

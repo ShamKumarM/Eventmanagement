@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ValidationError
 
 from .db import db
+from .expiry import job_is_expired
 from .reactions import attach_reaction_counts, attach_employer_names
 from .deps import get_current_employer, get_current_user
 from .schemas import (
@@ -209,19 +210,27 @@ def create_job(payload: JobCreate, user=Depends(get_current_employer)):
 @router.get("/jobs/mine")
 def my_jobs(
     status: Optional[JobStatus] = None,
+    history: bool = Query(False, description="Return expired/completed/cancelled jobs when true."),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
     user=Depends(get_current_employer),
 ):
-    q = db.table("jobs").select(SELECT, count="exact").eq("employer_id", str(user.id))
+    q = db.table("jobs").select(SELECT).eq("employer_id", str(user.id))
     if status:
         q = q.eq("status", status.value)
+    # Classify by the actual scheduled shift end rather than relying on the
+    # once-daily cleanup job or the database status alone.
+    all_rows = q.order("job_date", desc=True).limit(1000).execute().data or []
+    items = [
+        row for row in all_rows
+        if (job_is_expired(row) or row.get("status") in {"completed", "cancelled", "expired"}) == history
+    ]
+    total = len(items)
     start = (page - 1) * page_size
-    res = q.order("job_date", desc=True).range(start, start + page_size - 1).execute()
-    items = with_positions(res.data)
+    items = with_positions(items[start:start + page_size])
     attach_employer_names(items)
     attach_reaction_counts(items, str(user.id))
-    return {"total": res.count, "page": page, "items": items}
+    return {"total": total, "page": page, "items": items}
 
 
 @router.patch("/jobs/{job_id}")
@@ -391,7 +400,8 @@ def job_feed(
     q = q.order("job_date").order("start_time")
     start = (page - 1) * page_size
 
-    # distance filter: bounding box in SQL, exact Haversine in Python
+    # Use a bounded candidate set so jobs ending earlier today are removed
+    # even before the scheduled database cleanup executes.
     if lat is not None and lng is not None and radius_km:
         dlat = radius_km / 111.0
         dlng = radius_km / (111.0 * max(cos(radians(lat)), 0.01))
@@ -399,15 +409,15 @@ def job_feed(
             q.gte("latitude", lat - dlat).lte("latitude", lat + dlat)
             .gte("longitude", lng - dlng).lte("longitude", lng + dlng)
         )
-        rows = q.limit(500).execute().data
+    candidates = q.limit(1000).execute().data or []
+    rows = [r for r in candidates if not job_is_expired(r)]
+    if lat is not None and lng is not None and radius_km:
         for r in rows:
-            r["distance_km"] = round(haversine_km(lat, lng, r["latitude"], r["longitude"]), 1)
-        rows = [r for r in rows if r["distance_km"] <= radius_km]
-        total = len(rows)
-        rows = rows[start:start + page_size]
-    else:
-        res = q.range(start, start + page_size - 1).execute()
-        rows, total = res.data, res.count
+            if r.get("latitude") is not None and r.get("longitude") is not None:
+                r["distance_km"] = round(haversine_km(lat, lng, r["latitude"], r["longitude"]), 1)
+        rows = [r for r in rows if r.get("distance_km") is not None and r["distance_km"] <= radius_km]
+    total = len(rows)
+    rows = rows[start:start + page_size]
 
     items = with_positions(rows)
     attach_employer_names(items)

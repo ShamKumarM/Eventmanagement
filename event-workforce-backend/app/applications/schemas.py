@@ -16,9 +16,8 @@ class ApplicationStatus(str, Enum):
 
 # Proposed workflow (confirm with team).
 EMPLOYER_TRANSITIONS = {
-    ApplicationStatus.pending: {
-        ApplicationStatus.shortlisted, ApplicationStatus.selected, ApplicationStatus.rejected,
-    },
+    ApplicationStatus.pending: {ApplicationStatus.selected, ApplicationStatus.rejected},
+    # Existing shortlisted records from older app versions can still be resolved.
     ApplicationStatus.shortlisted: {ApplicationStatus.selected, ApplicationStatus.rejected},
 }
 WORKER_WITHDRAWABLE = {
